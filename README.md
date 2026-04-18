@@ -1,106 +1,33 @@
-# PepFlow: Full-Atom Peptide Design
+# NS-Pep: *De novo* Peptide Design with Non-Standard Amino Acids
 
-![alt text](teaser.png)
+**NS-Pep** is a unified flow-matching framework for co-designing peptide sequences and structures that incorporate non-standard amino acids (NSAAs). It introduces Residue Frequency-Guided Modification (RFGM), Progressive Side-chain Perception (PSP), and Interaction-Aware Weighting (IAW) to tackle the long-tailed NSAA distribution and to capture fine-grained side-chain geometry.
 
+## Peptide Generation on the General Test Set
 
-This repository contains the official implementation of 💡 Full-Atom Peptide Design based on Multi-modal Flow Matching (ICML 2024).
+Table 1 of the paper: comparison for peptide generation on the **General** test set.
 
-You can find our [paper](https://arxiv.org/abs/2406.00735) here. We also appreciate the inspiration from [diffab](https://github.com/luost26/diffab) and [frameflow](https://github.com/microsoft/protein-frame-flow).
+| Method | AAR % ↑ | AAR(S) % ↑ | RMSD Å ↓ | SSR % ↑ | BSR % ↑ | AFF % ↑ | scRMSD Å ↓ | Diversity ↑ |
+|---|---|---|---|---|---|---|---|---|
+| RFdiffusion | 8.66 | 8.69 | 17.57 | 71.75 | 6.52 | 12.06 | 19.64 | 0.41 |
+| ProteinGenerator | 7.08 | 7.12 | 17.26 | 75.30 | 4.28 | 8.91 | 23.02 | 0.39 |
+| PPFLOW | 8.63 | 8.87 | 9.45 | 0.11 | 75.14 | 6.53 | 15.77 | *0.66* |
+| DiffPepBuilder | 6.71 | 6.77 | 8.36 | 75.49 | **85.86** | *12.11* | 14.65 | 0.51 |
+| PepGLAD | 6.82 | 6.90 | 7.78 | 78.72 | 81.48 | 10.36 | 13.43 | **0.72** |
+| PepFlow | *16.30* | *16.76* | 4.98 | **85.80** | 81.50 | 11.60 | 12.32 | 0.50 |
+| PepFlow* | 15.88 | 15.88 | *4.94* | 83.40 | 84.36 | 11.39 | *11.67* | 0.51 |
+| **NS-Pep (ours)** | **22.53** | **22.35** | **4.92** | *85.00* | *81.62* | **17.23** | **11.50** | 0.49 |
 
-If you have any questions, please contact lijiahanypc@pku.edu.cn or ced3ljhypc@gmail.com. Thank you! :)
+**Bold** = best; *italic* = second best.
 
-## Install
+*Model weights, training/inference code, and related files will be released later.*
 
-
-### Environment
-
-Please replace cuda and torch version to match your machine, here we test our code on CUDA >= 11.7, we also suggest using [micromamba](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html) as a replace of conda.
-
-```bash
-conda env create -f environment.yml # or use micromamba instead of conda
-
-conda activate flow
-
-pip install torch-scatter -f https://data.pyg.org/whl/torch-2.0.0+cu117.html
-
-pip install joblib lmdb easydict
-
-```
-
-### Clone Repo### Train
-
-```bash
-git clone https://github.com/Ced3-han/PepFlowww.git
-```
-
-We suggest adding the code to the Python environment variable, or you can use setup tools.
-
- ```bash
-export PYTHONPATH=$(pwd):$PYTHONPATH
-python setup.py develop
- ```
-
-
-### Data and Weights Download
-
-We provide data and pretrained model weights [here](https://drive.google.com/drive/folders/1bHaKDF3uCDPtfsihjZs0zmjwF6UU1uVl?usp=sharing).
-
-+ PepMerge_release.zip: 1.2GB
-+ PepMerge_lmdb.zip: 180MB
-+ model1.pt: 80MB
-+ model2.pt: 80MB
-
-The ```PepMerge_release.zip``` contains filtered data of peptide-receptor pairs. For example, in the folder ```1a0n_A```, the ```P``` chain in the PDB file ```1a0n``` is the peptide. In this folder, we provide the FASTA and PDB files of the peptide and receptor. The postfix _merge means the peptide and receptor are in the same PDB file. We also extract the binding pocket of the receptor, where our model is trained to generate peptides based on the binding pocket. You can also download [PepBDB](http://huanglab.phys.hust.edu.cn/pepbdb/db/1cta_A/) and [QBioLip](https://yanglab.qd.sdu.edu.cn/Q-BioLiP/Download), and use ```playgrounds/gen_dataset```.ipynb to reproduce the dataset.
-
-The ```PepMerge_lmdb.zip``` contains several different splits of the dataset. We use ```mmseqs2``` to cluster complexes based on receptor sequence identity. See ```playgrounds/cluster.ipynb``` for details. The names.txt file contains the names of complexes in the test set. You can use ```models_con/pep_dataloader.py``` to load these datasets. We suggest putting these LMDBs in a single ```Data``` folder.
-
-Besides, ```model1.pt``` and ```model2.pt``` are two checkpoints that you can load using ```models_con/flow_model.py``` together with the config file configs/learn_angle.yaml. We suggest using model1 for benchmark evaluation and model2 for real-world peptide design tasks, the latter is trained on a larger dataset.
-
-
-## Usage
-
-We will add more user-friendly straightforward pipelines (generation and evaluation) later.
-
-### Inference and Generate
-
-By default, we support sampling of generated peptides from our processed dataset. You can use ```models_con/sample.py``` to sample, and ```models_con/inference.py``` to reconstruct PDB files.
-
-If you want to use your own data, you can organize your data (peptide and pocket) as we did in PepMerge_release and construct a dataset for sampling and reconstruction. You can also use ```models_con/pep_dataloader/preprocess_structure``` to parse a single data point. 
-
-
-
-
-### Evaluation
-
-Our evaluation involves many third-party packages, and we include some useful evaluation scripts in ```eval```. Please refer to our paper for details and download the corresponding packages for evaluation. Please use different python environments for these tools.
-
-
-
-### Train
-
-You can also ```train.py``` on single GPU training and ```train_ddp.py``` for multiple GPT training.
-
-
-## Future Work
-
-
-Future improvements on peptide generation models may include chemical modifications, non-canonical amino acids, pretraining on larger datasets, language models, better sampling methods, etc. Stay tuned and feel free to contact us for collaboration and discussion!
-
-
-
-## Reference
+## Citation
 
 ```bibtex
-@InProceedings{pmlr-v235-li24o,
-  title={Full-Atom Peptide Design based on Multi-modal Flow Matching},
-  author={Li, Jiahan and Cheng, Chaoran and Wu, Zuofan and Guo, Ruihan and Luo, Shitong and Ren, Zhizhou and Peng, Jian and Ma, Jianzhu},
-  booktitle={Proceedings of the 41st International Conference on Machine Learning},
-  pages={27615--27640},
-  year={2024},
-  editor={Salakhutdinov, Ruslan and Kolter, Zico and Heller, Katherine and Weller, Adrian and Oliver, Nuria and Scarlett, Jonathan and Berkenkamp, Felix},
-  volume={235},
-  series={Proceedings of Machine Learning Research},
-  month=21--27 Jul},
-  publisher={PMLR},
+@article{guo2025ns,
+  title={NS-Pep: De novo Peptide Design with Non-Standard Amino Acids},
+  author={Guo, Tao and Yin, Junbo and Wang, Yu and Gao, Xin},
+  journal={arXiv preprint arXiv:2510.03326},
+  year={2025}
 }
 ```

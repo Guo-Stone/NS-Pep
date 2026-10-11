@@ -1,0 +1,93 @@
+model:
+  encoder:
+    node_embed_size: 128
+    edge_embed_size: 64
+    ipa:
+      c_s: 128 #${model.node_embed_size}
+      c_z: 64 #${model.edge_embed_size}
+      c_hidden: 128
+      no_heads: 8
+      no_qk_points: 8
+      no_v_points: 12
+      seq_tfmr_num_heads: 4
+      seq_tfmr_num_layers: 2
+      num_blocks: 6  # 6
+      stop_grad: False
+      num_angles: 5  # 1 or 5
+      graph_triangle_block:
+        enable: True # true
+        c_s: 128
+        c_z: 64
+        c_rbf: 64
+        c_gate_s: 16
+        c_hidden: 128
+        c_hidden_mul: 128
+        no_heads: 4
+        transition_n: 2
+        k_neighbour: 32
+        k_linear: 0 #16
+        inf: 1000000000
+        pair_dropout: 0.25
+  interpolant:
+    min_t: 1.e-2
+    t_normalization_clip: 0.9
+    sample_sequence: True
+    sample_structure: True
+    rots:
+      train_schedule: linear
+      sample_schedule: exp
+      exp_rate: 10
+    trans:
+      train_schedule: linear
+      sample_schedule: linear
+      sigma: 1.0
+    seqs:
+      num_classes: 23
+      simplex_value: 5.0
+    sampling:
+      num_timesteps: 100
+    self_condition: False
+
+train:
+  loss_weights:
+    trans_loss: 0.5 # 1.0 for dreamfold, 0.05 for yim
+    rot_loss: 0.5 # 1.0 for dreamfold, 0.5 for yim
+    bb_atom_loss: 0.25
+    seqs_loss: 1.0
+    angle_loss: 1.0
+    torsion_loss: 0.5
+    sctrans_loss: 0.1  # 0.1
+  max_iters: 320000  # 40000
+  val_freq: 5000  # 5000
+  save_freq: 40000  # Frequency of saving ckpt
+  batch_size: 32  # 256 (32 * 8)
+  accum_grad: 1
+  seed: 114514
+  max_grad_norm: 100.0
+  optimizer:
+    type: adam
+    lr: 1.e-4  # 1.e-4
+    weight_decay: 0.0
+    beta1: 0.9
+    beta2: 0.999
+  scheduler:
+    type: plateau
+    factor: 0.8  # 0.8
+    patience: 10
+    min_lr: 5.e-6
+
+dataset:
+  split: /ibex/user/guot0b/PepFlowww-NS3/data/data_split_NS3_v3.json
+  train:
+    type: peprec
+    structure_dir: /ibex/user/guot0b/DataPool/Pepflow/
+    dataset_dir: /ibex/user/guot0b/PepFlowww-NS3/data/Dataset_NS3/  # NoscPep, NS3
+    name: NS3_TRAIN
+    reset: False  # False
+    tao_repr: True  # Whether to use our representation: True, False
+  val:
+    type: peprec
+    structure_dir: /ibex/user/guot0b/DataPool/Pepflow/
+    dataset_dir: /ibex/user/guot0b/PepFlowww-NS3/data/Dataset_NS3/
+    name: NS3_VAL
+    reset: False

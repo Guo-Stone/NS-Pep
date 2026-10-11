@@ -384,7 +384,6 @@ def atom14_to_atom37(atom14_pos: torch.Tensor,
 
     """
     res_mask = atom14_pos_mask.sum(-1) > 0
-
     restype_to_atom37_map_tensor = torch.full((21, 15), -1, dtype=torch.long)
     for idx in range(len(restype_to_atom37_map_tensor)):
         restype_to_atom37_map_tensor[idx] = torch.tensor(restype_to_atom37_map[idx])

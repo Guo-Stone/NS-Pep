@@ -472,7 +472,7 @@ def sample_for_data_tao(data, model, device, save_root, num_steps=200,
         tmp = (torch.tensor(PTR_data_PDB).to(pos.device) - t_chi4[0, NS_idx]) @ R_chi4[0, NS_idx]
         # sctrans_1_c = (sctrans_1 - trans_1_c[:, :, None, :]) @ rotmats_1  # (B, L, 9, 3), rel coor.
         # DEBUG--------
-
+    
     traj = model.sample(batch, num_steps=num_steps, sample_bb=sample_structure,
                         sample_seq=sample_sequence, sample_ang=sample_ang)
 
@@ -504,6 +504,27 @@ def sample_for_data_tao(data, model, device, save_root, num_steps=200,
         }
 
         save_pdb(data_saved, path=os.path.join(save_root, f'sample_{i}.pdb'))
+
+
+def sample_seq_only(data, model, device, save_root, num_steps=200,
+                    sample_sequence=True, nums=16):
+    if not os.path.exists(save_root):
+        os.makedirs(save_root)
+    batch = recursive_to(item_to_batch(data, nums=nums), device=device)
+
+    traj = model.sample(batch, num_steps=num_steps, sample_seq=sample_sequence)
+
+    final = recursive_to(traj[-1], device=device)
+
+    aa_new = final['seqs']
+
+    json_content = []
+
+    for idx in range(nums):
+        seq = aa_new[idx][data['generate_mask']].cpu().numpy()
+        json_content.append([str(constants.AA(res)) for res in seq])
+    with open(os.path.join(save_root, 'seqs.json'), 'w') as f:
+        json.dump(json_content, f, indent=True)
 
 
 def save_samples_bb(samples, save_dir):

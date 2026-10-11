@@ -255,6 +255,53 @@ class GAEncoder_NS3(nn.Module):
         return pred_rotmats1, pred_trans1, pred_angles1, pred_seqs1_prob
 
 
+class GAEncoder_NS3_seq(nn.Module):
+    def __init__(self, ipa_conf):
+        super().__init__()
+        self._ipa_conf = ipa_conf
+
+        # for condition on current seq
+        self.current_seq_embedder = nn.Embedding(constants.PAD_RESIDUE_INDEX + 1,
+                                                 self._ipa_conf.c_s)
+        self.seq_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, constants.PAD_RESIDUE_INDEX - 1)
+            # nn.Linear(self._ipa_conf.c_s, 22)
+        )
+        
+        self.feat_dim = self._ipa_conf.c_s
+
+        # mixer
+        self.res_feat_mixer = nn.Sequential(
+            nn.Linear(3 * self._ipa_conf.c_s,
+                      self._ipa_conf.c_s),
+            nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s),
+        )
+
+
+    def embed_t(self, timesteps, mask):
+        timestep_emb = get_time_embedding(
+            timesteps[:, 0],
+            self.feat_dim,
+            max_positions=2056
+        )[:, None, :].repeat(1, mask.shape[1], 1)
+        return timestep_emb
+
+    def forward(self, t, seqs_t, node_embed, res_mask):
+        num_batch, num_res = seqs_t.shape
+        # incorperate current seq and timesteps
+        node_mask = res_mask
+
+        node_embed = self.res_feat_mixer(torch.cat(
+            [node_embed, self.current_seq_embedder(seqs_t), self.embed_t(t, node_mask)], dim=-1))
+
+        pred_seqs1_prob = self.seq_net(node_embed)
+
+        return pred_seqs1_prob
+
+
 class GAEncoder_NS3_noChi(nn.Module):
     def __init__(self, ipa_conf):
         super().__init__()

@@ -112,3 +112,71 @@ class EdgeEmbedder(nn.Module):
         feat_all = feat_all * mask_pair[:, :, :, None]
 
         return feat_all
+
+
+class EdgeEmbedder_seq(nn.Module):
+
+    def __init__(self, feat_dim, max_num_atoms, max_aa_types=PAD_RESIDUE_INDEX+1,
+                 max_relpos=32, num_bins=16):
+        super().__init__()
+        self.max_num_atoms = max_num_atoms
+        self.max_aa_types = max_aa_types
+        self.max_relpos = max_relpos
+        self.num_bins = num_bins
+        self.aa_pair_embed = nn.Embedding(self.max_aa_types * self.max_aa_types, feat_dim)
+        self.relpos_embed = nn.Embedding(2 * max_relpos + 1, feat_dim)
+
+        self.aapair_to_distcoef = nn.Embedding(self.max_aa_types * self.max_aa_types, max_num_atoms * max_num_atoms)
+        nn.init.zeros_(self.aapair_to_distcoef.weight)
+
+        infeat_dim = feat_dim + feat_dim
+        self.out_mlp = nn.Sequential(
+            nn.Linear(infeat_dim, feat_dim), nn.ReLU(),
+            nn.Linear(feat_dim, feat_dim), nn.ReLU(),
+            nn.Linear(feat_dim, feat_dim),
+        )
+
+    def forward(self, aa, res_nb, chain_nb, pos_atoms, mask_atoms, structure_mask=None, sequence_mask=None):
+        """
+        Args:
+            aa: (N, L).
+            res_nb: (N, L).
+            chain_nb: (N, L).
+            pos_atoms:  (N, L, A, 3)
+            mask_atoms: (N, L, A)
+            trans, sc_trans: (N,L,3)
+            structure_mask: (N, L)
+            sequence_mask:  (N, L), mask out unknown amino acids to generate.
+
+        Returns:
+            (N, L, L, feat_dim)
+        """
+        # Remove other atoms
+        pos_atoms = pos_atoms[:, :, :self.max_num_atoms]
+        mask_atoms = mask_atoms[:, :, :self.max_num_atoms]
+
+        mask_residue = mask_atoms[:, :, BBHeavyAtom.CA]  # (N, L)
+        mask_pair = mask_residue[:, :, None] * mask_residue[:, None, :]
+
+        # Pair identities
+        if sequence_mask is not None:
+            # Avoid data leakage at training time
+            aa = torch.where(sequence_mask, aa, torch.full_like(aa, fill_value=AA.UNK))
+        aa_pair = aa[:, :, None] * self.max_aa_types + aa[:, None, :]  # (N, L, L)
+        feat_aapair = self.aa_pair_embed(aa_pair)
+
+        # Relative sequential positions
+        same_chain = (chain_nb[:, :, None] == chain_nb[:, None, :])
+        relpos = torch.clamp(
+            res_nb[:, :, None] - res_nb[:, None, :],
+            min=-self.max_relpos, max=self.max_relpos,
+        )  # (N, L, L)
+        feat_relpos = self.relpos_embed(relpos + self.max_relpos) * same_chain[:, :, :, None]
+
+
+        # All
+        feat_all = torch.cat([feat_aapair, feat_relpos], dim=-1)
+        feat_all = self.out_mlp(feat_all)  # (N, L, L, F)
+        feat_all = feat_all * mask_pair[:, :, :, None]
+
+        return feat_all

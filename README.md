@@ -19,7 +19,45 @@ Table 1 of the paper: comparison for peptide generation on the **General** test 
 
 **Bold** = best; *italic* = second best.
 
-*Model weights, training/inference code, and related files will be released later.*
+## Model Weights & Evaluation
+
+The checkpoint and evaluation files below reproduce the **NS-Pep** row of the table above (AAR = 22.53%).
+
+| Item | Path |
+|---|---|
+| Checkpoint (320k iterations; model weights + config only) | `checkpoints/NS-Pep_320k.pt` (Git LFS) |
+| Model class | `models_con/flow_model.py` → `NS_Pep` |
+| Evaluation code | `eval_recovery.py` |
+| Evaluation script | `scripts/eval_NS3.sh` |
+| Config (used to train this checkpoint) | `configs/NS-Pep_320k.yaml` |
+| NSAA constants (SEP / TYS / PTR) | `pepflow/modules/protein/constants.py` |
+| Dataset split (TRAIN / VAL / TEST = 8228 / 1065 / 219) | `data/data_split_NS3_v3.json` |
+| Reference results (16 samples per test case) | `results/test_320k_num16/eval_recovery.csv` |
+| Environment (`bio`) | `environment/bio_environment.yml`, `environment/bio_conda_list.txt`, `environment/bio_pip_freeze.txt` |
+
+### Data
+
+The dataset can be downloaded from Google Drive:
+**https://drive.google.com/file/d/1j459qA_2MFAvEHaZ6CceT5B8a3z8HKw0/view?usp=sharing**
+
+After unzipping, each test case is a folder named by its ID (e.g. `1a46_I/`). It contains the receptor/pocket/peptide PDB files and the preprocessed `<ID>_re_NS3.pt`. If that `.pt` file is missing, `eval_recovery.py` rebuilds it from `peptide_re.pdb` / `pocket_re.pdb`.
+
+### Run
+
+```bash
+git lfs pull                          # fetch the checkpoint
+conda env create -f environment/bio_environment.yml
+conda activate bio
+bash scripts/eval_NS3.sh /path/to/Pepflow/ ./outputs/test_320k_num16
+```
+
+The script writes `eval_recovery.csv` to the output directory, with one row per test case and an `All` summary row:
+`rec_seq` = AAR, `rec_pos` = RMSD, `rec_ss` = SSR, `rec_bs` = BSR. The `Clash` column is disabled and always reads 100.
+Sampling is stochastic, so a fresh run gives a slightly different value. Our re-run on a V100 gave an AAR of 22.78%, compared with the 22.53% reference.
+
+Notes:
+- `eval_recovery.py` and the config files still contain our cluster paths as defaults. `scripts/eval_NS3.sh` overrides every path that inference needs.
+- The model class is selected by the uncommented `model = flow_model.NS_Pep(...)` line in `eval_recovery.py`.
 
 ## Citation
 

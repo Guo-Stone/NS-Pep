@@ -7,6 +7,7 @@ import pandas as pd
 import random
 import json
 import torch
+import torch.nn.functional as F
 import time
 from pepflow.utils.misc import load_config, seed_all
 from models_con.sample import sample, sample_for_data_tao, sample_traj
@@ -76,11 +77,14 @@ if __name__ == '__main__':
             # model = FlowModel_tao(config.model).to(args.device)
             # model = flow_model.FlowModel_NS3_SCAux(config.model).to(args.device)
             # model = flow_model.FlowModel_NS3_weight_loss(config.model).to(args.device)
-            # model = flow_model.NS_Pep(config.model).to(args.device)
+            model = flow_model.NS_Pep(config.model).to(args.device)
+            # model = flow_model.NS_Pep_v4(config.model).to(args.device)
             # model = flow_model.NS_Pep_v3(config.model).to(args.device)
-            model = flow_model.NS_Pep_v3_modifiedRFGM(config.model).to(args.device)
+            # model = flow_model.NS_Pep_v3_modifiedRFGM(config.model).to(args.device)
             # model = flow_model.NS_Pep_v3_noPSP(config.model).to(args.device)
             # model = flow_model.NS_Pep_v3_noRFGM(config.model).to(args.device)
+            # model = flow_model.NS_Pep_v3_BLV(config.model).to(args.device)
+            # model = flow_model.NS_Pep_v3_seesaw(config.model).to(args.device)
             # model = flow_model.NS_Pep_v3_noIAW(config.model).to(args.device)
             # model = flow_model.NS_Pep_v3_modifiedRFGM_v3(config.model).to(args.device)
             # model = flow_model.NS_Pep_v3_noPSP_modifiedRFGM(config.model).to(args.device)
@@ -169,9 +173,9 @@ if __name__ == '__main__':
 
         # If there isn't .pt file, make it
         pt_file = os.path.join(item_folder, f"{item}_re_NS3.pt")
+        
         if not os.path.exists(pt_file):
             preprocess_structure_v2(item_folder, pt_file, renumber_chain=True)
-
         # Generation
         item_output_dir = os.path.join(args.output_dir, item)
         if os.path.exists(item_output_dir) and len(os.listdir(item_output_dir)) == args.num:
@@ -179,6 +183,9 @@ if __name__ == '__main__':
         else:
             try:
                 data_load = torch.load(pt_file)
+                if 'ESM' in args.ckpt:
+                    poc_esm = torch.load(os.path.join(item_folder,'pocket_emb_esm2_t12_480.pt'))
+                    data_load['esm'] = F.pad(poc_esm, (0, 0, 0, len(data_load['aa'])-len(poc_esm)))
                 sample_for_data_tao(data_load, model, args.device, item_output_dir,
                                     tao_repr=False, nums=args.num,
                                     sample_structure=True, sample_sequence=True, sample_ang=True)
@@ -282,11 +289,13 @@ if __name__ == '__main__':
             rec_bs = get_bind_ratio(item_path, pt_to_pdb, "A", "A")
             # use 'pocket_merge.pdb' instead of 'receptor_merge.pdb'. Because the pocket is in 10 A distance.
             rec_bs_list_per_gen_item.append(rec_bs)
-
             # # 2.6 Clash
             """
+            # gen_pos, gen_seq = gen_con['complex_pos'][:, :-2], gen_con['complex_seq']
+            # gen_seq = torch.where(gen_seq>20, 20, gen_seq)
+            # gen_atom_mask = gen_con['complex_mask'][:, :-2]
             gen_pos, gen_seq = gen_con['complex_pos'], gen_con['complex_seq']
-            gen_atom_mask = gen_con['complex_mask']
+            gen_atom_mask = gen_con['complex_mask']            
             peptide_idx = torch.where(gen_con['pep_mask'])[0]
             atom37, atom37_mask = atom14_to_atom37(gen_pos,
                                                    gen_atom_mask,

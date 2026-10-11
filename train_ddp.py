@@ -116,7 +116,7 @@ if __name__ == '__main__':
         logger = get_logger('train', None, local_rank)
         writer = BlackHole()
     else:
-        os.environ["WANDB_API_KEY"] = '7917fd5553c3d08019fe1ee97053179eb1bc4eb8'
+        pass  # Set WANDB_API_KEY in your shell environment (do not hard-code it)
         run = wandb.init(project=args.name, config=config, name='%s[%s]' % (config_name, args.tag))
         # if args.resume:
         #     log_dir = os.path.dirname(os.path.dirname(args.resume))

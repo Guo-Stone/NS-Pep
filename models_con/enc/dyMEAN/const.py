@@ -780,6 +780,21 @@ AA_GEOMETRY: Dict[str, dict] = {
         "z-dihedrals": [122.95, 180.0, 123.99],
         "z-lengths": [1.57, 1.54, 1.54],
     },
+    "MLE":{"atoms": ['CB', 'CG', 'CD1', 'CD2', 'CN',],},
+    "M3L":{"atoms": ['CB', 'CG', 'CD', 'CE', 'NZ', 'CM1', 'CM2', 'CM3',],},
+    "ALY":{"atoms": ['CB', 'CG', 'CD', 'CE', 'NZ', 'CH', 'CH3', 'OH',],},
+    "TPO":{"atoms": ['CB', 'OG1', 'CG2', 'PD', 'O1P', 'O2P', 'O3P',],},
+    "DAL":{"atoms": ['CB',],},
+    "HYP":{"atoms": ['CB', 'CG', 'CD', 'OD1',],},
+    "MVA":{"atoms": ['CB', 'CG1', 'CG2', 'CN',],},
+    "DLY":{"atoms": ['CB', 'CG', 'CD', 'CE', 'NZ',],},
+    "DLE":{"atoms": ['CB', 'CG', 'CD1', 'CD2',],},
+    "SAR":{"atoms": ['CN',],},
+    "NLE":{"atoms": ['CB', 'CG', 'CD', 'CE',],},
+    "BMT":{"atoms": ['CB', 'OG1', 'CG2', 'CD1', 'CD2', 'CE', 'CZ', 'CH', 'CN',],},
+    "DGL":{"atoms": ['CB', 'CG', 'CD', 'OE1', 'OE2',],},
+    "DPR":{"atoms": ['CB', 'CG', 'CD',],},
+    "DTR":{"atoms": ['CB', 'CG', 'CD1', 'CD2', 'NE1', 'CE2', 'CE3', 'CZ2', 'CZ3', 'CH2',],},
 }
 
 
@@ -818,6 +833,11 @@ aas = [
     ('K', 'LYS'), ('Q', 'GLN'), ('M', 'MET'), ('R', 'ARG'),
     ('S', 'SER'), ('T', 'THR'), ('C', 'CYS'), ('P', 'PRO'),
     ('SEP', 'SEP'), ('TYS', 'TYS'), ('PTR', 'PTR'),
+    ('MLE', 'MLE'), ('M3L', 'M3L'), ('ALY', 'ALY'),
+    ('TPO', 'TPO'), ('DAL', 'DAL'), ('HYP', 'HYP'),
+    ('MVA', 'MVA'), ('DLY', 'DLY'), ('DLE', 'DLE'),
+    ('SAR', 'SAR'), ('NLE', 'NLE'), ('BMT', 'BMT'),
+    ('DGL', 'DGL'), ('DPR', 'DPR'), ('DTR', 'DTR'),
 
 ]
 
@@ -887,7 +907,82 @@ sidechain_bonds = {
     'SEP': [('CA', 'CB', 1), ('CB', 'OG', 1), ('OG', 'PD', 1), ('PD', 'OP1', 1), ('PD', 'OP2', 1), ('PD', 'OP3', 1),],
     'T': [('CA', 'CB', 1), ('CB', 'OG1', 1), ('CB', 'CG2', 1)],
     'C': [('CA', 'CB', 1), ('CB', 'SG', 1)],
-    'P': [('CA', 'CB', 1), ('CB', 'CG', 1), ('CG', 'CD', 1), ('CD', 'N', 1)]
+    'P': [('CA', 'CB', 1), ('CB', 'CG', 1), ('CG', 'CD', 1), ('CD', 'N', 1)],
+    'MLE': [('N', 'CN', 1), ('CA', 'CB', 1), ('CB', 'CG', 1), ('CG', 'CD1', 1), ('CG', 'CD2', 1),],
+    'M3L': [
+        ('CA', 'CB', 1), ('CB', 'CG', 1), ('CG', 'CD', 1),
+        ('CD', 'CE', 1), ('CE', 'NZ', 1),
+        ('NZ', 'CM1', 1), ('NZ', 'CM2', 1), ('NZ', 'CM3', 1)
+    ],
+
+    'ALY': [
+        ('CA', 'CB', 1), ('CB', 'CG', 1), ('CG', 'CD', 1),
+        ('CD', 'CE', 1), ('CE', 'NZ', 1),
+        ('NZ', 'CH', 1), ('CH', 'OH', 1), ('CH', 'CH3', 1)
+    ],
+
+    'TPO': [
+        ('CA', 'CB', 1), ('CB', 'OG1', 1), ('CB', 'CG2', 1),
+        ('OG1', 'PD', 1), ('PD', 'O1P', 1), ('PD', 'O2P', 1), ('PD', 'O3P', 1)
+    ],
+
+    'DAL': [
+        ('CA', 'CB', 1)
+    ],
+
+    'HYP': [
+        ('CA', 'CB', 1), ('CB', 'CG', 1), ('CG', 'CD', 1),
+        ('CG', 'OD1', 1), ('CD', 'N', 1)
+    ],
+
+    'MVA': [
+        ('N',  'CN', 1), ('CA', 'CB', 1),
+        ('CB', 'CG1', 1), ('CB', 'CG2', 1)
+    ],
+
+    'DLY': [
+        ('CA', 'CB', 1), ('CB', 'CG', 1), ('CG', 'CD', 1),
+        ('CD', 'CE', 1), ('CE', 'NZ', 1)
+    ],
+
+    'DLE': [
+        ('CA', 'CB', 1), ('CB', 'CG', 1),
+        ('CG', 'CD1', 1), ('CG', 'CD2', 1)
+    ],
+
+    'SAR': [
+        ('N', 'CN', 1)
+    ],
+
+    'NLE': [
+        ('CA', 'CB', 1), ('CB', 'CG', 1),
+        ('CG', 'CD', 1), ('CD', 'CE', 1)
+    ],
+
+    'BMT': [
+        ('N',  'CN', 1), ('CA', 'CB', 1),
+        ('CB', 'OG1', 1), ('CB', 'CG2', 1),
+        ('CG2', 'CD1', 1), ('CG2', 'CD2', 1),
+        ('CD2', 'CE', 1), ('CE',  'CZ', 1), ('CZ',  'CH', 1)
+    ],
+
+    'DGL': [
+        ('CA', 'CB', 1), ('CB', 'CG', 1),
+        ('CG', 'CD', 1), ('CD', 'OE1', 1), ('CD', 'OE2', 1)
+    ],
+
+    'DPR': [
+        ('N',  'CD', 1), ('CA', 'CB', 1),
+        ('CB', 'CG', 1), ('CG', 'CD', 1)
+    ],
+
+    'DTR': [
+        ('CA', 'CB', 1), ('CB', 'CG', 1),
+        ('CG', 'CD1', 1), ('CG', 'CD2', 1),
+        ('CD1', 'NE1', 1), ('CD2', 'CE2', 1), ('CD2', 'CE3', 1),
+        ('NE1', 'CE2', 1), ('CE2', 'CZ2', 1), ('CE3', 'CZ3', 1),
+        ('CZ2', 'CH2', 1), ('CZ3', 'CH2', 1)
+    ],    
 }
 
 # atoms for defining chi angles on the side chains
@@ -941,6 +1036,31 @@ chi_angles_atoms = {
     "PTR": [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD1'],
             ['CE1', 'CZ', 'OH', 'PZ'], ['CZ', 'OH', 'PZ', 'OP1']],
     "VAL": [["N", "CA", "CB", "CG1"]],
+    "MLE": [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD1'],
+             ['C', 'CA', 'N', 'CN']],
+    "M3L": [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD'],
+             ['CB', 'CG', 'CD', 'CE'], ['CG', 'CD', 'CE', 'NZ'],
+             ['CD', 'CE', 'NZ', 'CM1']],
+    "ALY": [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD'],
+             ['CB', 'CG', 'CD', 'CE'], ['CG', 'CD', 'CE', 'NZ'],
+             ['CD', 'CE', 'NZ', 'CH'], ['CE', 'NZ', 'CH', 'CH3']], 
+    "TPO": [['N', 'CA', 'CB', 'OG1'], ['CA', 'CB', 'OG1', 'PD'],
+             ['CB', 'OG1', 'PD', 'O1P']],
+    "DAL": [],
+    "HYP": [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD']],
+    "MVA": [['N', 'CA', 'CB', 'CG1'], ['C', 'CA', 'N', 'CN']],
+    "DLY": [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD'],
+             ['CB', 'CG', 'CD', 'CE'], ['CG', 'CD', 'CE', 'NZ']],
+    "DLE": [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD1']],
+    "SAR": [['C', 'CA', 'N', 'CN']],
+    "NLE": [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD'],
+             ['CB', 'CG', 'CD', 'CE']],
+    "BMT": [['N', 'CA', 'CB', 'OG1'], ['CA', 'CB', 'CG2', 'CD2'],
+             ['CB', 'CG2', 'CD2', 'CE'], ['CG2', 'CD2', 'CE', 'CZ']],
+    "DGL": [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD'],
+             ['CB', 'CG', 'CD', 'OE1']],
+    "DPR": [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD']],
+    "DTR": [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD1']],   
 }
 
 # amino acid smiles

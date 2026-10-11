@@ -2,37 +2,32 @@
 
 **NS-Pep** is a unified flow-matching framework for co-designing peptide sequences and structures that incorporate non-standard amino acids (NSAAs). It introduces Residue Frequency-Guided Modification (RFGM), Progressive Side-chain Perception (PSP), and Interaction-Aware Weighting (IAW) to tackle the long-tailed NSAA distribution and to capture fine-grained side-chain geometry.
 
-## Peptide Generation on the General Test Set
+> **Branch `NS18`** — release of the NS-Pep model extended to **18 non-standard amino acids**.
+> The 3-NSAA version (SEP / TYS / PTR) used for Table 1 of the paper is on the [`master`](https://github.com/Guo-Stone/NS-Pep/tree/master) branch.
 
-Table 1 of the paper: comparison for peptide generation on the **General** test set.
+The 18 NSAAs (`data/NS18_list.json`; constants in `pepflow/modules/protein/constants.py`):
+`SEP, TYS, PTR, MLE, M3L, ALY, TPO, DAL, HYP, MVA, DLY, DLE, SAR, NLE, BMT, DGL, DPR, DTR`
 
-| Method | AAR % ↑ | AAR(S) % ↑ | RMSD Å ↓ | SSR % ↑ | BSR % ↑ | AFF % ↑ | scRMSD Å ↓ | Diversity ↑ |
-|---|---|---|---|---|---|---|---|---|
-| RFdiffusion | 8.66 | 8.69 | 17.57 | 71.75 | 6.52 | 12.06 | 19.64 | 0.41 |
-| ProteinGenerator | 7.08 | 7.12 | 17.26 | 75.30 | 4.28 | 8.91 | 23.02 | 0.39 |
-| PPFLOW | 8.63 | 8.87 | 9.45 | 0.11 | 75.14 | 6.53 | 15.77 | *0.66* |
-| DiffPepBuilder | 6.71 | 6.77 | 8.36 | 75.49 | **85.86** | *12.11* | 14.65 | 0.51 |
-| PepGLAD | 6.82 | 6.90 | 7.78 | 78.72 | 81.48 | 10.36 | 13.43 | **0.72** |
-| PepFlow | *16.30* | *16.76* | 4.98 | **85.80** | 81.50 | 11.60 | 12.32 | 0.50 |
-| PepFlow* | 15.88 | 15.88 | *4.94* | 83.40 | 84.36 | 11.39 | *11.67* | 0.51 |
-| **NS-Pep (ours)** | **22.53** | **22.35** | **4.92** | *85.00* | *81.62* | **17.23** | **11.50** | 0.49 |
+## Results on the NS18 Test Set
 
-**Bold** = best; *italic* = second best.
+From `results/NS18_test_320k_num16/eval_recovery.csv` (`All` row; 16 samples per case, 187 test cases):
+
+| AAR % ↑ | AAR on NSAA positions % ↑ | C-RMSD Å ↓ | L-RMSD Å ↓ | SSR % ↑ | BSR % ↑ | Diversity ↑ |
+|---|---|---|---|---|---|---|
+| 18.73 | 17.76 (844 / 4752) | 5.56 | 2.79 | 95.86 | 81.41 | 0.47 |
 
 ## Model Weights & Evaluation
 
-The checkpoint and evaluation files below reproduce the **NS-Pep** row of the table above (AAR = 22.53%).
-
 | Item | Path |
 |---|---|
-| Checkpoint (320k iterations; model weights + config only) | `checkpoints/NS-Pep_320k.pt` (Git LFS) |
-| Model class | `models_con/flow_model.py` → `NS_Pep` |
+| Checkpoint (320k iterations; model weights + config only) | `checkpoints/NS-Pep_NS18_320k.pt` (Git LFS) |
+| Model class | `models_con/flow_model.py` → `NS_Pep_v3` |
 | Evaluation code | `eval_recovery.py` |
-| Evaluation script | `scripts/eval_NS3.sh` |
-| Config (used to train this checkpoint) | `configs/NS-Pep_320k.yaml` |
-| NSAA constants (SEP / TYS / PTR) | `pepflow/modules/protein/constants.py` |
-| Dataset split (TRAIN / VAL / TEST = 8228 / 1065 / 219) | `data/data_split_NS3_v3.json` |
-| Reference results (16 samples per test case) | `results/test_320k_num16/eval_recovery.csv` |
+| Evaluation script | `scripts/eval_NS18.sh` |
+| Config (used to train this checkpoint) | `configs/NS-Pep_NS18_320k.yaml` |
+| NSAA list / constants | `data/NS18_list.json`, `pepflow/modules/protein/constants.py` |
+| Dataset split (TRAIN / TEST = 9665 / 188) | `data/data_split_NS18_v4_seed1177_curated.json` |
+| Reference results | `results/NS18_test_320k_num16/eval_recovery.csv` |
 | Environment (`bio`) | `environment/bio_environment.yml`, `environment/bio_conda_list.txt`, `environment/bio_pip_freeze.txt` |
 
 ### Data
@@ -40,7 +35,7 @@ The checkpoint and evaluation files below reproduce the **NS-Pep** row of the ta
 The dataset can be downloaded from Google Drive:
 **https://drive.google.com/file/d/1j459qA_2MFAvEHaZ6CceT5B8a3z8HKw0/view?usp=sharing**
 
-After unzipping, each test case is a folder named by its ID (e.g. `1a46_I/`). It contains the receptor/pocket/peptide PDB files and the preprocessed `<ID>_re_NS3.pt`. If that `.pt` file is missing, `eval_recovery.py` rebuilds it from `peptide_re.pdb` / `pocket_re.pdb`.
+After unzipping, each test case is a folder named by its ID. It contains the receptor/pocket/peptide PDB files and the preprocessed `<ID>_re_NS18.pt`. If that `.pt` file is missing, `eval_recovery.py` rebuilds it from `peptide_re.pdb` / `pocket_re.pdb`.
 
 ### Run
 
@@ -48,16 +43,16 @@ After unzipping, each test case is a folder named by its ID (e.g. `1a46_I/`). It
 git lfs pull                          # fetch the checkpoint
 conda env create -f environment/bio_environment.yml
 conda activate bio
-bash scripts/eval_NS3.sh /path/to/Pepflow/ ./outputs/test_320k_num16
+bash scripts/eval_NS18.sh /path/to/Pepflow/ ./outputs/NS18_test_320k_num16
 ```
 
-The script writes `eval_recovery.csv` to the output directory, with one row per test case and an `All` summary row:
-`rec_seq` = AAR, `rec_pos` = RMSD, `rec_ss` = SSR, `rec_bs` = BSR. The `Clash` column is disabled and always reads 100.
-Sampling is stochastic, so a fresh run gives a slightly different value. Our re-run on a V100 gave an AAR of 22.78%, compared with the 22.53% reference.
+The script writes `eval_recovery.csv` to the output directory, with one row per test case and an `All` summary row.
+Its columns are `rec_seq` (AAR), `rec_pos(C-RMSD)`, `rec_pos(L-RMSD)`, `rec_ss` (SSR), `rec_bs` (BSR), `diversity`, and `rec_seq(<NSAA>)`. Each `rec_seq(<NSAA>)` cell is written as `correct_total`.
+Sampling is stochastic, so a fresh run gives a slightly different value. Our re-run on a V100 gave an AAR of 18.82%, compared with the 18.73% reference.
 
 Notes:
-- `eval_recovery.py` and the config files still contain our cluster paths as defaults. `scripts/eval_NS3.sh` overrides every path that inference needs.
-- The model class is selected by the uncommented `model = flow_model.NS_Pep(...)` line in `eval_recovery.py`.
+- `eval_recovery.py` and the config files still contain our cluster paths as defaults. `scripts/eval_NS18.sh` overrides every path that inference needs.
+- The model class is selected by the uncommented `model = flow_model.NS_Pep_v3(...)` line in `eval_recovery.py`.
 
 ## Citation
 

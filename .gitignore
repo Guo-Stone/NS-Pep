@@ -185,7 +185,8 @@ cython_debug/
 
 # NS-Pep release files (tracked despite the rules above)
 !data/*.py
-!data/data_split_NS3_v3.json
+!data/data_split_NS18_v4_seed1177_curated.json
+!data/NS18_list.json
 !checkpoints/
 !checkpoints/*.pt
 !results/**

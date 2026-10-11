@@ -7,59 +7,80 @@ import enum
 NM_TO_ANG_SCALE = 10.0
 ANG_TO_NM_SCALE = 1 / NM_TO_ANG_SCALE
 
-PAD_RESIDUE_INDEX = 24  # 21
+PAD_RESIDUE_INDEX = 39  # 21, 24(NS3)
 
-WEIGHT_DICT = {'LEU': 0.107, 'ALA': 0.119, 'ARG': 0.134,
-               'PRO': 0.144, 'SER': 0.157, 'GLU': 0.16,
-               'GLY': 0.162, 'LYS': 0.174, 'ILE': 0.183,
-               'THR': 0.191, 'ASP': 0.193, 'VAL': 0.198,
-               'PHE': 0.245, 'GLN': 0.246, 'ASN': 0.289,
-               'TYR': 0.314, 'HIS': 0.452, 'MET': 0.563,
-               'TRP': 0.668, 'CYS': 0.776, 'SEP': 2.68,
-               'TYS': 4.827, 'PTR': 5.232}  # derived from script.py
+# WEIGHT_DICT = {'LEU': 0.107, 'ALA': 0.119, 'ARG': 0.134,
+#                'PRO': 0.144, 'SER': 0.157, 'GLU': 0.16,
+#                'GLY': 0.162, 'LYS': 0.174, 'ILE': 0.183,
+#                'THR': 0.191, 'ASP': 0.193, 'VAL': 0.198,
+#                'PHE': 0.245, 'GLN': 0.246, 'ASN': 0.289,
+#                'TYR': 0.314, 'HIS': 0.452, 'MET': 0.563,
+#                'TRP': 0.668, 'CYS': 0.776, 'SEP': 2.68,
+#                'TYS': 4.827, 'PTR': 5.232}  # derived from script.py
 
-BLV_weight_list = [0.392, 0.66, 0.469, 0.439, 0.511, 0.449,
-                   0.58, 0.47, 0.446, 0.359, 0.627, 0.535,
-                   0.422, 0.504, 0.408, 0.442, 0.459, 0.478,
-                   0.668, 0.547, 0.881, 0.969, 1.0]
+WEIGHT_DICT = {'LEU': 0.109, 'ALA': 0.12, 'ARG': 0.134, 
+               'PRO': 0.145, 'SER': 0.158, 'GLU': 0.161, 
+               'GLY': 0.162, 'LYS': 0.177, 'ILE': 0.186, 
+               'THR': 0.192, 'ASP': 0.196, 'VAL': 0.202, 
+               'PHE': 0.249, 'GLN': 0.25, 'ASN': 0.296, 
+               'TYR': 0.319, 'HIS': 0.455, 'MET': 0.579, 
+               'TRP': 0.681, 'CYS': 0.784, 'SEP': 2.427, 
+               'TYS': 4.393, 'PTR': 4.827, 'M3L': 5.525, 
+               'HYP': 5.896, 'ALY': 6.143, 'TPO': 7.382, 
+               'DAL': 9.549, 'DLY': 16.269, 'NLE': 18.692, 
+               'DLE': 20.43, 'MLE': 22.526, 'MVA': 25.1, 
+               'DGL': 29.284, 'DPR': 32.537, 'DTR': 35.14, 
+               'SAR': 51.677, 'BMT': 146.418}  # NS18
+
+# BLV_weight_list = [0.392, 0.66, 0.469, 0.439, 0.511, 0.449,
+#                    0.58, 0.47, 0.446, 0.359, 0.627, 0.535,
+#                    0.422, 0.504, 0.408, 0.442, 0.459, 0.478,
+#                    0.668, 0.547, 0.881, 0.969, 1.0]  # NS3
+BLV_weight_list = [0.308, 0.517, 0.367, 0.345, 0.401, 0.349, 
+                   0.454, 0.365, 0.349, 0.283, 0.492, 0.417, 
+                   0.328, 0.396, 0.319, 0.344, 0.362, 0.37, 
+                   0.52, 0.428, 0.689, 0.759, 0.764, 0.777, 
+                   0.796, 0.796, 0.802, 0.805, 0.811, 0.894, 
+                   0.906, 0.923, 0.943, 0.943, 0.97, 0.993, 
+                   0.996, 1.0]  # NS18
 
 ##
 # Residue identities
 
 non_standard_residue_substitutions = {
     '2AS': 'ASP', '3AH': 'HIS', '5HP': 'GLU', 'ACL': 'ARG', 'AGM': 'ARG', 'AIB': 'ALA', 'ALM': 'ALA', 'ALO': 'THR',
-    'ALY': 'LYS', 'ARM': 'ARG',
+    'ALY': 'ALY', 'ARM': 'ARG',
     'ASA': 'ASP', 'ASB': 'ASP', 'ASK': 'ASP', 'ASL': 'ASP', 'ASQ': 'ASP', 'AYA': 'ALA', 'BCS': 'CYS', 'BHD': 'ASP',
-    'BMT': 'THR', 'BNN': 'ALA',
+    'BMT': 'BMT', 'BNN': 'ALA',
     'BUC': 'CYS', 'BUG': 'LEU', 'C5C': 'CYS', 'C6C': 'CYS', 'CAS': 'CYS', 'CCS': 'CYS', 'CEA': 'CYS', 'CGU': 'GLU',
     'CHG': 'ALA', 'CLE': 'LEU', 'CME': 'CYS',
     'CSD': 'ALA', 'CSO': 'CYS', 'CSP': 'CYS', 'CSS': 'CYS', 'CSW': 'CYS', 'CSX': 'CYS', 'CXM': 'MET', 'CY1': 'CYS',
     'CY3': 'CYS', 'CYG': 'CYS',
-    'CYM': 'CYS', 'CYQ': 'CYS', 'DAH': 'PHE', 'DAL': 'ALA', 'DAR': 'ARG', 'DAS': 'ASP', 'DCY': 'CYS', 'DGL': 'GLU',
+    'CYM': 'CYS', 'CYQ': 'CYS', 'DAH': 'PHE', 'DAL': 'DAL', 'DAR': 'ARG', 'DAS': 'ASP', 'DCY': 'CYS', 'DGL': 'DGL',
     'DGN': 'GLN', 'DHA': 'ALA',
-    'DHI': 'HIS', 'DIL': 'ILE', 'DIV': 'VAL', 'DLE': 'LEU', 'DLY': 'LYS', 'DNP': 'ALA', 'DPN': 'PHE', 'DPR': 'PRO',
+    'DHI': 'HIS', 'DIL': 'ILE', 'DIV': 'VAL', 'DLE': 'DLE', 'DLY': 'DLY', 'DNP': 'ALA', 'DPN': 'PHE', 'DPR': 'DPR',
     'DSN': 'SER', 'DSP': 'ASP',
-    'DTH': 'THR', 'DTR': 'TRP', 'DTY': 'TYR', 'DVA': 'VAL', 'EFC': 'CYS', 'FLA': 'ALA', 'FME': 'MET', 'GGL': 'GLU',
+    'DTH': 'THR', 'DTR': 'DTR', 'DTY': 'TYR', 'DVA': 'VAL', 'EFC': 'CYS', 'FLA': 'ALA', 'FME': 'MET', 'GGL': 'GLU',
     'GL3': 'GLY', 'GLZ': 'GLY',
     'GMA': 'GLU', 'GSC': 'GLY', 'HAC': 'ALA', 'HAR': 'ARG', 'HIC': 'HIS', 'HIP': 'HIS', 'HMR': 'ARG', 'HPQ': 'PHE',
-    'HTR': 'TRP', 'HYP': 'PRO',
+    'HTR': 'TRP', 'HYP': 'HYP',
     'IAS': 'ASP', 'IIL': 'ILE', 'IYR': 'TYR', 'KCX': 'LYS', 'LLP': 'LYS', 'LLY': 'LYS', 'LTR': 'TRP', 'LYM': 'LYS',
     'LYZ': 'LYS', 'MAA': 'ALA', 'MEN': 'ASN',
-    'MHS': 'HIS', 'MIS': 'SER', 'MLE': 'LEU', 'MPQ': 'GLY', 'MSA': 'GLY', 'MSE': 'MET', 'MVA': 'VAL', 'NEM': 'HIS',
-    'NEP': 'HIS', 'NLE': 'LEU',
+    'MHS': 'HIS', 'MIS': 'SER', 'MLE': 'MLE', 'MPQ': 'GLY', 'MSA': 'GLY', 'MSE': 'MET', 'MVA': 'MVA', 'NEM': 'HIS',
+    'NEP': 'HIS', 'NLE': 'NLE',
     'NLN': 'LEU', 'NLP': 'LEU', 'NMC': 'GLY', 'OAS': 'SER', 'OCS': 'CYS', 'OMT': 'MET', 'PAQ': 'TYR', 'PCA': 'GLU',
     'PEC': 'CYS', 'PHI': 'PHE',
-    'PHL': 'PHE', 'PR3': 'CYS', 'PRR': 'ALA', 'PTR': 'PTR', 'PYX': 'CYS', 'SAC': 'SER', 'SAR': 'GLY', 'SCH': 'CYS',
+    'PHL': 'PHE', 'PR3': 'CYS', 'PRR': 'ALA', 'PTR': 'PTR', 'PYX': 'CYS', 'SAC': 'SER', 'SAR': 'SAR', 'SCH': 'CYS',
     'SCS': 'CYS', 'SCY': 'CYS',
     'SEL': 'SER', 'SET': 'SER', 'SHC': 'CYS', 'SHR': 'LYS', 'SMC': 'CYS', 'SOC': 'CYS', 'STY': 'TYR',
     'SVA': 'SER', 'TIH': 'ALA',
-    'TPL': 'TRP', 'TPO': 'THR', 'TPQ': 'ALA', 'TRG': 'LYS', 'TRO': 'TRP', 'TYB': 'TYR', 'TYI': 'TYR', 'TYQ': 'TYR',
+    'TPL': 'TRP', 'TPO': 'TPO', 'TPQ': 'ALA', 'TRG': 'LYS', 'TRO': 'TRP', 'TYB': 'TYR', 'TYI': 'TYR', 'TYQ': 'TYR',
     'TYS': 'TYS', 'TYY': 'TYR',
     'ALA': 'ALA', 'CYS': 'CYS', 'ASP': 'ASP', 'GLU': 'GLU', 'PHE': 'PHE', 'GLY': 'GLY', 'HIS': 'HIS', 'ILE': 'ILE',
     'LYS': 'LYS', 'LEU': 'LEU',
     'MET': 'MET', 'ASN': 'ASN', 'PRO': 'PRO', 'GLN': 'GLN', 'ARG': 'ARG', 'SER': 'SER', 'THR': 'THR', 'VAL': 'VAL',
-    'TRP': 'TRP', 'TYR': 'TYR',
-    'UNK': 'UNK', 'SEP': 'SEP'  # The nsaa we could deal with
+    'TRP': 'TRP', 'TYR': 'TYR', 'M3L': 'M3L',
+    'UNK': 'UNK', 'SEP': 'SEP', # The nsaa we could deal with
 }
 
 ressymb_to_resindex = {
@@ -77,7 +98,7 @@ BACKBONE_FRAME = 0
 OMEGA_FRAME = 1
 PHI_FRAME = 2
 PSI_FRAME = 3
-CHI1_FRAME, CHI2_FRAME, CHI3_FRAME, CHI4_FRAME = 4, 5, 6, 7
+CHI1_FRAME, CHI2_FRAME, CHI3_FRAME, CHI4_FRAME, CHI5_FRAME, CHI6_FRAME = 4, 5, 6, 7, 8, 9
 
 
 class AA(enum.IntEnum):
@@ -104,7 +125,22 @@ class AA(enum.IntEnum):
     SEP = 20
     TYS = 21
     PTR = 22
-    UNK = 23
+    MLE = 23
+    M3L = 24
+    ALY = 25
+    TPO = 26
+    DAL = 27
+    HYP = 28
+    MVA = 29
+    DLY = 30
+    DLE = 31
+    SAR = 32
+    NLE = 33
+    BMT = 34
+    DGL = 35
+    DPR = 36
+    DTR = 37
+    UNK = 38
 
     @classmethod
     def _missing_(cls, value):
@@ -136,7 +172,7 @@ num_aa_types = len(AA)
 # Atom identities
 
 max_num_heavyatoms = 17
-max_num_hydrogens = 16
+max_num_hydrogens = 22
 max_num_allatoms = max_num_heavyatoms + max_num_hydrogens
 
 class BBHeavyAtom(enum.IntEnum):
@@ -173,38 +209,67 @@ restype_to_heavyatom_names = {
     AA.TYS: ['N', 'CA', 'C', 'O', 'CB', 'CG', 'CD1', 'CD2', 'CE1', 'CE2', 'CZ', 'OH', 'S', 'O1', 'O2', 'O3', 'OXT'],
     AA.PTR: ['N', 'CA', 'C', 'O', 'CB', 'CG', 'CD1', 'CD2', 'CE1', 'CE2', 'CZ', 'OH', 'P', 'O1P', 'O2P', 'O3P', 'OXT'],
     AA.VAL: ['N', 'CA', 'C', 'O', 'CB', 'CG1', 'CG2', '', '', '', '', '', '', '', '', '', 'OXT'],
+    AA.MLE: ['N', 'CA', 'C', 'O', 'CB', 'CG', 'CD1', 'CD2', 'CN', '', '', '', '', '', '', '', 'OXT'],
+    AA.M3L: ['N', 'CA', 'C', 'O', 'CB', 'CG', 'CD', 'CE', 'NZ', 'CM1', 'CM2', 'CM3', '', '', '', '', 'OXT'],
+    AA.ALY: ['N', 'CA', 'C', 'O', 'CB', 'CG', 'CD', 'CE', 'NZ', 'CH', 'CH3', 'OH', '', '', '', '', 'OXT'],
+    AA.TPO: ['N', 'CA', 'C', 'O', 'CB', 'OG1', 'CG2', 'P', 'O1P', 'O2P', 'O3P', '', '', '', '', '', 'OXT'],
+    AA.DAL: ['N', 'CA', 'C', 'O', 'CB', '', '', '', '', '', '', '', '', '', '', '', 'OXT'],
+    AA.HYP: ['N', 'CA', 'C', 'O', 'CB', 'CG', 'CD', 'OD1', '', '', '', '', '', '', '', '', 'OXT'],
+    AA.MVA: ['N', 'CA', 'C', 'O', 'CB', 'CG1', 'CG2', 'CN', '', '', '', '', '', '', '', '', 'OXT'],
+    AA.DLY: ['N', 'CA', 'C', 'O', 'CB', 'CG', 'CD', 'CE', 'NZ', '', '', '', '', '', '', '', 'OXT'],
+    AA.DLE: ['N', 'CA', 'C', 'O', 'CB', 'CG', 'CD1', 'CD2', '', '', '', '', '', '', '', '', 'OXT'],
+    AA.SAR: ['N', 'CA', 'C', 'O', 'CN', '', '', '', '', '', '', '', '', '', '', '', 'OXT'],
+    AA.NLE: ['N', 'CA', 'C', 'O', 'CB', 'CG', 'CD', 'CE', '', '', '', '', '', '', '', '', 'OXT'],
+    AA.BMT: ['N', 'CA', 'C', 'O', 'CB', 'OG1', 'CG2', 'CD1', 'CD2', 'CE', 'CZ', 'CH', 'CN', '', '', '', 'OXT'],
+    AA.DGL: ['N', 'CA', 'C', 'O', 'CB', 'CG', 'CD', 'OE1', 'OE2', '', '', '', '', '', '', '', 'OXT'],
+    AA.DPR: ['N', 'CA', 'C', 'O', 'CB', 'CG', 'CD', '', '', '', '', '', '', '', '', '', 'OXT'],
+    AA.DTR: ['N', 'CA', 'C', 'O', 'CB', 'CG', 'CD1', 'CD2', 'NE1', 'CE2', 'CE3', 'CZ2', 'CZ3', 'CH2', '', '', 'OXT'],
     AA.UNK: ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
 }
 for names in restype_to_heavyatom_names.values(): assert len(names) == max_num_heavyatoms
 
 restype_to_hydrogen_names = {
-    AA.ALA: ['H', 'H2', 'H3', 'HA', 'HB1', 'HB2', 'HB3', 'HXT', '', '', '', '', '', '', '', ''],
-    AA.CYS: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG', 'HXT', '', '', '', '', '', '', '', ''],
-    AA.ASP: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HD2', 'HXT', '', '', '', '', '', '', '', ''],
-    AA.GLU: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HE2', 'HXT', '', '', '', '', '', ''],
-    AA.PHE: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HD1', 'HD2', 'HE1', 'HE2', 'HZ', 'HXT', '', '', '', ''],
-    AA.GLY: ['H', 'H2', 'H3', 'HA2', 'HA3', 'HXT', '', '', '', '', '', '', '', '', '', ''],
-    AA.HIS: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HD1', 'HD2', 'HE1', 'HE2', 'HXT', '', '', '', '', ''],
-    AA.ILE: ['H', 'H2', 'H3', 'HA', 'HB', 'HG12', 'HG13', 'HG21', 'HG22', 'HG23', 'HD11', 'HD12', 'HD13', 'HXT', '',
-             ''],
-    AA.LYS: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HD2', 'HD3', 'HE2', 'HE3', 'HZ1', 'HZ2', 'HZ3', 'HXT'],
-    AA.LEU: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG', 'HD11', 'HD12', 'HD13', 'HD21', 'HD22', 'HD23', 'HXT', '', ''],
-    AA.MET: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HE1', 'HE2', 'HE3', 'HXT', '', '', '', ''],
-    AA.ASN: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HD21', 'HD22', 'HXT', '', '', '', '', '', '', ''],
-    AA.PRO: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HD2', 'HD3', 'HXT', '', '', '', '', ''],
-    AA.GLN: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HE21', 'HE22', 'HXT', '', '', '', '', ''],
-    AA.ARG: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HD2', 'HD3', 'HE', 'HH11', 'HH12', 'HH21', 'HH22',
-             'HXT'],
-    AA.SER: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG', 'HXT', '', '', '', '', '', '', '', ''],
-    AA.SEP: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HXT', 'HOP2', 'HOP3', '', '', '', '', '', '', ''],
-    AA.THR: ['H', 'H2', 'H3', 'HA', 'HB', 'HG1', 'HG21', 'HG22', 'HG23', 'HXT', '', '', '', '', '', ''],
-    AA.VAL: ['H', 'H2', 'H3', 'HA', 'HB', 'HG11', 'HG12', 'HG13', 'HG21', 'HG22', 'HG23', 'HXT', '', '', '', ''],
-    AA.TRP: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HD1', 'HE1', 'HE3', 'HZ2', 'HZ3', 'HH2', 'HXT', '', '', ''],
-    AA.TYR: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HD1', 'HD2', 'HE1', 'HE2', 'HH', 'HXT', '', '', '', ''],
-    AA.TYS: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HD1', 'HD2', 'HE1', 'HE2', 'HO3', 'HXT', '', '', '', ''],
-    AA.PTR: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HD1', 'HD2', 'HE1', 'HE2', 'HO2P', 'HO3P', 'HXT', '', '', ''],
-    AA.UNK: ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.ALA: ['H', 'H2', 'H3', 'HA', 'HB1', 'HB2', 'HB3', 'HXT', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.CYS: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG', 'HXT', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.ASP: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HD2', 'HXT', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.GLU: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HE2', 'HXT', '', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.PHE: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HD1', 'HD2', 'HE1', 'HE2', 'HZ', 'HXT', '', '', '', '', '', '', '', '', '', ''],
+    AA.GLY: ['H', 'H2', 'H3', 'HA2', 'HA3', 'HXT', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.HIS: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HD1', 'HD2', 'HE1', 'HE2', 'HXT', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.ILE: ['H', 'H2', 'H3', 'HA', 'HB', 'HG12', 'HG13', 'HG21', 'HG22', 'HG23', 'HD11', 'HD12', 'HD13', 'HXT', '', '', '', '', '', '', '', ''],
+    AA.LYS: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HD2', 'HD3', 'HE2', 'HE3', 'HZ1', 'HZ2', 'HZ3', 'HXT', '', '', '', '', '', ''],
+    AA.LEU: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG', 'HD11', 'HD12', 'HD13', 'HD21', 'HD22', 'HD23', 'HXT', '', '', '', '', '', '', '', ''],
+    AA.MET: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HE1', 'HE2', 'HE3', 'HXT', '', '', '', '', '', '', '', '', '', ''],
+    AA.ASN: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HD21', 'HD22', 'HXT', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.PRO: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HD2', 'HD3', 'HXT', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.GLN: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HE21', 'HE22', 'HXT', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.ARG: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HD2', 'HD3', 'HE', 'HH11', 'HH12', 'HH21', 'HH22', 'HXT', '', '', '', '', '', ''],
+    AA.SER: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG', 'HXT', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.SEP: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HXT', 'HOP2', 'HOP3', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.THR: ['H', 'H2', 'H3', 'HA', 'HB', 'HG1', 'HG21', 'HG22', 'HG23', 'HXT', '', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.VAL: ['H', 'H2', 'H3', 'HA', 'HB', 'HG11', 'HG12', 'HG13', 'HG21', 'HG22', 'HG23', 'HXT', '', '', '', '', '', '', '', '', '', ''],
+    AA.TRP: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HD1', 'HE1', 'HE3', 'HZ2', 'HZ3', 'HH2', 'HXT', '', '', '', '', '', '', '', '', ''],
+    AA.TYR: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HD1', 'HD2', 'HE1', 'HE2', 'HH', 'HXT', '', '', '', '', '', '', '', '', '', ''],
+    AA.TYS: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HD1', 'HD2', 'HE1', 'HE2', 'HO3', 'HXT', '', '', '', '', '', '', '', '', '', ''],
+    AA.PTR: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HD1', 'HD2', 'HE1', 'HE2', 'HO2P', 'HO3P', 'HXT', '', '', '', '', '', '', '', '', ''],
+    AA.MLE: ['H', 'H2', 'HA', 'HB2', 'HB3', 'HG', 'HD11', 'HD12', 'HD13', 'HD21', 'HD22', 'HD23', 'HXT', 'HN1', 'HN2', 'HN3', '', '', '', '', '', ''],
+    AA.M3L: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HD2', 'HD3', 'HE2', 'HE3', 'HM11', 'HM12', 'HM13', 'HM21', 'HM22', 'HM23', 'HM31', 'HM32', 'HM33', 'HXT'],
+    AA.ALY: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HD2', 'HD3', 'HE2', 'HE3', 'HZ', 'HH31', 'HH32', 'HH33', 'HXT', '', '', '', '', ''],
+    AA.TPO: ['H', 'H2', 'H3', 'HA', 'HB', 'HG21', 'HG22', 'HG23', 'HOP2', 'HOP3', 'HXT', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.DAL: ['H', 'H2', 'H3', 'HA', 'HB1', 'HB2', 'HB3', 'HXT', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.HYP: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG', 'HD1', 'HD22', 'HD23', 'HXT', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.MVA: ['H', 'H2', 'HA', 'HB', 'HG11', 'HG12', 'HG13', 'HG21', 'HG22', 'HG23', 'HN1', 'HN2', 'HN3', 'HXT', '', '', '', '', '', '', '', ''],
+    AA.DLY: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HD2', 'HD3', 'HE2', 'HE3', 'HZ1', 'HZ2', 'HZ3', 'HXT', '', '', '', '', '', ''],
+    AA.DLE: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG', 'HD11', 'HD12', 'HD13', 'HD21', 'HD22', 'HD23', 'HXT', '', '', '', '', '', '', '', ''],
+    AA.SAR: ['H', 'H2', 'HA2', 'HA3', 'HN1', 'HN2', 'HN3', 'HXT', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.NLE: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HD2', 'HD3', 'HE1', 'HE2', 'HE3', 'HXT', '', '', '', '', '', '', '', ''],
+    AA.BMT: ['H', 'H2', 'HA', 'HB', 'HG1', 'HG2', 'HD11', 'HD12', 'HD13', 'HD22', 'HD23', 'HE', 'HZ', 'HH1', 'HH2', 'HH3', 'HN1', 'HN2', 'HN3', 'HXT', '', ''],
+    AA.DGL: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HE2', 'HXT', '', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.DPR: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HG2', 'HG3', 'HD2', 'HD3', 'HXT', '', '', '', '', '', '', '', '', '', '', ''],
+    AA.DTR: ['H', 'H2', 'H3', 'HA', 'HB2', 'HB3', 'HD1', 'HE1', 'HE3', 'HZ2', 'HZ3', 'HH2', 'HXT', '', '', '', '', '', '', '', '', ''],
+    AA.UNK: ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
 }
+
 for names in restype_to_hydrogen_names.values(): assert len(names) == max_num_hydrogens
 
 restype_to_allatom_names = {
@@ -423,6 +488,144 @@ restype_to_bonded_atom_name_pairs = {
         ('CE2', 'HE2', BT.AromaticSingle), ('CZ', 'OH', BT.AromaticSingle), ('OH', 'P', BT.AromaticSingle),
         ('P', 'O1P', BT.AromaticDouble), ('P', 'O2P', BT.AromaticSingle), ('P', 'O3P', BT.AromaticSingle),
         ('O2P', 'HO2P', BT.AromaticSingle), ('O3P', 'HO3P', BT.AromaticSingle), ('OXT', 'HXT', BT.AromaticSingle), ],
+    AA.MLE: [
+        ('N', 'H', BT.Single), ('N', 'H2', BT.Single), ('N', 'CN', BT.Single),
+        ('CN', 'HN1', BT.AromaticSingle), ('CN', 'HN2', BT.AromaticSingle), ('CN', 'HN3', BT.AromaticSingle),
+        ('N', 'CA', BT.AromaticSingle), ('CA', 'C', BT.AromaticSingle), ('CA', 'CB', BT.AromaticSingle),
+        ('CA', 'HA', BT.AromaticSingle), ('C', 'O', BT.AromaticDouble), ('C', 'OXT', BT.AromaticSingle),
+        ('CB', 'CG', BT.AromaticSingle), ('CB', 'HB2', BT.AromaticSingle), ('CB', 'HB3', BT.AromaticSingle),
+        ('CG', 'CD1', BT.AromaticSingle), ('CG', 'CD2', BT.AromaticSingle), ('CG', 'HG', BT.AromaticSingle),
+        ('CD1', 'HD11', BT.AromaticSingle), ('CD1', 'HD12', BT.AromaticSingle), ('CD1', 'HD13', BT.AromaticSingle),
+        ('CD2', 'HD21', BT.AromaticSingle), ('CD2', 'HD22', BT.AromaticSingle), ('CD2', 'HD23', BT.AromaticSingle),
+        ('OXT', 'HXT', BT.AromaticSingle), ],
+    AA.M3L: [
+        ('N', 'H', BT.Single), ('N', 'H2', BT.Single), ('N', 'H3', BT.Single),
+        ('N', 'CA', BT.AromaticSingle), ('CA', 'C', BT.AromaticSingle), ('CA', 'CB', BT.AromaticSingle),
+        ('CA', 'HA', BT.AromaticSingle), ('C', 'O', BT.AromaticDouble), ('C', 'OXT', BT.AromaticSingle),
+        ('CB', 'CG', BT.AromaticSingle), ('CB', 'HB2', BT.AromaticSingle), ('CB', 'HB3', BT.AromaticSingle),
+        ('CG', 'CD', BT.AromaticSingle), ('CG', 'HG2', BT.AromaticSingle), ('CG', 'HG3', BT.AromaticSingle),
+        ('CD', 'CE', BT.AromaticSingle), ('CD', 'HD2', BT.AromaticSingle), ('CD', 'HD3', BT.AromaticSingle),
+        ('CE', 'NZ', BT.AromaticSingle), ('CE', 'HE2', BT.AromaticSingle), ('CE', 'HE3', BT.AromaticSingle),
+        ('NZ', 'CM1', BT.AromaticSingle), ('NZ', 'CM2', BT.AromaticSingle), ('NZ', 'CM3', BT.AromaticSingle),
+        ('CM1', 'HM11', BT.AromaticSingle), ('CM1', 'HM12', BT.AromaticSingle), ('CM1', 'HM13', BT.AromaticSingle),
+        ('CM2', 'HM21', BT.AromaticSingle), ('CM2', 'HM23', BT.AromaticSingle), ('CM2', 'HM23', BT.AromaticSingle),
+        ('CM3', 'HM31', BT.AromaticSingle), ('CM3', 'HM33', BT.AromaticSingle), ('CM3', 'HM33', BT.AromaticSingle),
+        ('OXT', 'HXT', BT.AromaticSingle), ],    
+    AA.ALY: [
+        ('N', 'H', BT.Single), ('N', 'H2', BT.Single), ('N', 'H3', BT.Single),
+        ('N', 'CA', BT.AromaticSingle), ('CA', 'C', BT.AromaticSingle), ('CA', 'CB', BT.AromaticSingle),
+        ('CA', 'HA', BT.AromaticSingle), ('C', 'O', BT.AromaticDouble), ('C', 'OXT', BT.AromaticSingle),
+        ('CB', 'CG', BT.AromaticSingle), ('CB', 'HB2', BT.AromaticSingle), ('CB', 'HB3', BT.AromaticSingle),
+        ('CG', 'CD', BT.AromaticSingle), ('CG', 'HG2', BT.AromaticSingle), ('CG', 'HG3', BT.AromaticSingle),
+        ('CD', 'CE', BT.AromaticSingle), ('CD', 'HD2', BT.AromaticSingle), ('CD', 'HD3', BT.AromaticSingle),
+        ('CE', 'NZ', BT.AromaticSingle), ('CE', 'HE2', BT.AromaticSingle), ('CE', 'HE3', BT.AromaticSingle),
+        ('NZ', 'HZ', BT.AromaticSingle), ('NZ', 'CH', BT.AromaticSingle), ('CH', 'OH', BT.AromaticSingle),
+        ('CH', 'CH3', BT.AromaticSingle), ('CH3', 'HH31', BT.AromaticSingle), ('CH3', 'HH32', BT.AromaticSingle),
+        ('CH3', 'HH33', BT.AromaticSingle), ('OXT', 'HXT', BT.AromaticSingle), ], 
+    AA.TPO: [
+        ('N', 'H', BT.Single), ('N', 'H2', BT.Single), ('N', 'H3', BT.Single),
+        ('N', 'CA', BT.AromaticSingle), ('CA', 'C', BT.AromaticSingle), ('CA', 'CB', BT.AromaticSingle),
+        ('CA', 'HA', BT.AromaticSingle), ('C', 'O', BT.AromaticDouble), ('C', 'OXT', BT.AromaticSingle),
+        ('CB', 'OG1', BT.AromaticSingle), ('CB', 'CG2', BT.AromaticSingle), ('CB', 'HB', BT.AromaticSingle),
+        ('OG1', 'P', BT.AromaticSingle), ('CG2', 'HG21', BT.AromaticSingle), ('CG2', 'HG22', BT.AromaticSingle),
+        ('CG2', 'HG23', BT.AromaticSingle), ('OXT', 'HXT', BT.AromaticSingle), ('P', 'O1P', BT.AromaticDouble), 
+        ('P', 'O2P', BT.AromaticSingle), ('P', 'O3P', BT.AromaticSingle), ('O2P', 'HOP2', BT.AromaticSingle), ('O3P', 'HOP3', BT.AromaticSingle), ],    
+    AA.DAL: [
+        ('N', 'H', BT.Single), ('N', 'H2', BT.Single), ('N', 'H3', BT.Single),
+        ('N', 'CA', BT.AromaticSingle), ('CA', 'C', BT.AromaticSingle), ('CA', 'CB', BT.AromaticSingle),
+        ('CA', 'HA', BT.AromaticSingle), ('C', 'O', BT.AromaticDouble), ('C', 'OXT', BT.AromaticSingle),
+        ('CB', 'HB1', BT.AromaticSingle), ('CB', 'HB2', BT.AromaticSingle), ('CB', 'HB3', BT.AromaticSingle),
+        ('OXT', 'HXT', BT.AromaticSingle), ],
+    AA.HYP: [
+        ('N', 'H', BT.Single), ('N', 'H2', BT.Single), ('N', 'H3', BT.Single),
+        ('N', 'CA', BT.AromaticSingle), ('N', 'CD', BT.AromaticSingle), ('CA', 'C', BT.AromaticSingle),
+        ('CA', 'CB', BT.AromaticSingle), ('CA', 'HA', BT.AromaticSingle), ('C', 'O', BT.AromaticDouble),
+        ('C', 'OXT', BT.AromaticSingle), ('CB', 'CG', BT.AromaticSingle), ('CB', 'HB2', BT.AromaticSingle),
+        ('CB', 'HB3', BT.AromaticSingle), ('CG', 'CD', BT.AromaticSingle), ('CG', 'HG', BT.AromaticSingle),
+        ('CG', 'OD1', BT.AromaticSingle), ('CD', 'HD22', BT.AromaticSingle), ('CD', 'HD23', BT.AromaticSingle),
+        ('OXT', 'HXT', BT.AromaticSingle), ('HD1', 'OD1', BT.AromaticSingle),],
+    AA.MVA: [
+        ('N', 'H', BT.Single), ('N', 'H2', BT.Single), ('N', 'CN', BT.AromaticSingle),
+        ('N', 'CA', BT.AromaticSingle), ('CA', 'C', BT.AromaticSingle), ('CA', 'CB', BT.AromaticSingle),
+        ('CA', 'HA', BT.AromaticSingle), ('C', 'O', BT.AromaticDouble), ('C', 'OXT', BT.AromaticSingle),
+        ('CB', 'CG1', BT.AromaticSingle), ('CB', 'CG2', BT.AromaticSingle), ('CB', 'HB', BT.AromaticSingle),
+        ('CG1', 'HG11', BT.AromaticSingle), ('CG1', 'HG12', BT.AromaticSingle), ('CG1', 'HG13', BT.AromaticSingle),
+        ('CG2', 'HG21', BT.AromaticSingle), ('CG2', 'HG22', BT.AromaticSingle), ('CG2', 'HG23', BT.AromaticSingle),
+        ('OXT', 'HXT', BT.AromaticSingle), ('CN', 'HN1', BT.AromaticSingle), ('CN', 'HN2', BT.AromaticSingle),
+        ('CN', 'HN3', BT.AromaticSingle),],        
+    AA.DLY: [
+        ('N', 'H', BT.Single), ('N', 'H2', BT.Single), ('N', 'H3', BT.Single),
+        ('N', 'CA', BT.AromaticSingle), ('CA', 'C', BT.AromaticSingle), ('CA', 'CB', BT.AromaticSingle),
+        ('CA', 'HA', BT.AromaticSingle), ('C', 'O', BT.AromaticDouble), ('C', 'OXT', BT.AromaticSingle),
+        ('CB', 'CG', BT.AromaticSingle), ('CB', 'HB2', BT.AromaticSingle), ('CB', 'HB3', BT.AromaticSingle),
+        ('CG', 'CD', BT.AromaticSingle), ('CG', 'HG2', BT.AromaticSingle), ('CG', 'HG3', BT.AromaticSingle),
+        ('CD', 'CE', BT.AromaticSingle), ('CD', 'HD2', BT.AromaticSingle), ('CD', 'HD3', BT.AromaticSingle),
+        ('CE', 'NZ', BT.AromaticSingle), ('CE', 'HE2', BT.AromaticSingle), ('CE', 'HE3', BT.AromaticSingle),
+        ('NZ', 'HZ1', BT.AromaticSingle), ('NZ', 'HZ2', BT.AromaticSingle), ('NZ', 'HZ3', BT.AromaticSingle),
+        ('OXT', 'HXT', BT.AromaticSingle), ],        
+    AA.DLE: [
+        ('N', 'H', BT.Single), ('N', 'H2', BT.Single), ('N', 'H3', BT.Single),
+        ('N', 'CA', BT.AromaticSingle), ('CA', 'C', BT.AromaticSingle), ('CA', 'CB', BT.AromaticSingle),
+        ('CA', 'HA', BT.AromaticSingle), ('C', 'O', BT.AromaticDouble), ('C', 'OXT', BT.AromaticSingle),
+        ('CB', 'CG', BT.AromaticSingle), ('CB', 'HB2', BT.AromaticSingle), ('CB', 'HB3', BT.AromaticSingle),
+        ('CG', 'CD1', BT.AromaticSingle), ('CG', 'CD2', BT.AromaticSingle), ('CG', 'HG', BT.AromaticSingle),
+        ('CD1', 'HD11', BT.AromaticSingle), ('CD1', 'HD12', BT.AromaticSingle), ('CD1', 'HD13', BT.AromaticSingle),
+        ('CD2', 'HD21', BT.AromaticSingle), ('CD2', 'HD22', BT.AromaticSingle), ('CD2', 'HD23', BT.AromaticSingle),
+        ('OXT', 'HXT', BT.AromaticSingle), ],    
+    AA.SAR: [
+        ('N', 'H', BT.Single), ('N', 'H2', BT.Single), ('N', 'CN', BT.AromaticSingle),
+        ('N', 'CA', BT.AromaticSingle), ('CA', 'C', BT.AromaticSingle), ('CA', 'HA2', BT.AromaticSingle),
+        ('CA', 'HA3', BT.AromaticSingle), ('C', 'O', BT.AromaticDouble), ('C', 'OXT', BT.AromaticSingle),
+        ('OXT', 'HXT', BT.AromaticSingle), ('CN', 'HN1', BT.AromaticSingle), ('CN', 'HN2', BT.AromaticSingle),
+        ('CN', 'HN3', BT.AromaticSingle),],    
+    AA.NLE: [
+        ('N', 'H', BT.Single), ('N', 'H2', BT.Single), ('N', 'H3', BT.Single),
+        ('N', 'CA', BT.AromaticSingle), ('CA', 'C', BT.AromaticSingle), ('CA', 'CB', BT.AromaticSingle),
+        ('CA', 'HA', BT.AromaticSingle), ('C', 'O', BT.AromaticDouble), ('C', 'OXT', BT.AromaticSingle),
+        ('CB', 'CG', BT.AromaticSingle), ('CB', 'HB2', BT.AromaticSingle), ('CB', 'HB3', BT.AromaticSingle),
+        ('CG', 'CD', BT.AromaticSingle), ('CG', 'HG2', BT.AromaticSingle), ('CG', 'HG3', BT.AromaticSingle),
+        ('CD', 'HD2', BT.AromaticSingle), ('CD', 'HD3', BT.AromaticSingle), ('CE', 'CD', BT.AromaticSingle),
+        ('CE', 'HE1', BT.AromaticSingle), ('CE', 'HE2', BT.AromaticSingle), ('CE', 'HE3', BT.AromaticSingle),
+        ('OXT', 'HXT', BT.AromaticSingle), ],
+    AA.BMT: [
+        ('N', 'H', BT.Single), ('N', 'H2', BT.Single), ('N', 'CN', BT.AromaticSingle),
+        ('N', 'CA', BT.AromaticSingle), ('CA', 'C', BT.AromaticSingle), ('CA', 'CB', BT.AromaticSingle),
+        ('CA', 'HA', BT.AromaticSingle), ('C', 'O', BT.AromaticDouble), ('C', 'OXT', BT.AromaticSingle),
+        ('CB', 'OG1', BT.AromaticSingle), ('CB', 'CG2', BT.AromaticSingle), ('CB', 'HB', BT.AromaticSingle),
+        ('OG1', 'HG1', BT.AromaticSingle), ('CG2', 'CD1', BT.AromaticSingle), ('CD1', 'HD11', BT.AromaticSingle),
+        ('CD1', 'HD12', BT.AromaticSingle), ('CD1', 'HD13', BT.AromaticSingle), ('CG2', 'CD2', BT.AromaticSingle),
+        ('CG2', 'HG2', BT.AromaticSingle), ('CD2', 'CE', BT.AromaticSingle), ('CD2', 'HD22', BT.AromaticSingle),
+        ('CD2', 'HD23', BT.AromaticSingle), ('CE', 'CZ', BT.AromaticSingle), ('CE', 'HE', BT.AromaticSingle),
+        ('CZ', 'HZ', BT.AromaticSingle), ('CZ', 'CH', BT.AromaticSingle), ('CH', 'HH1', BT.AromaticSingle),
+        ('CH', 'HH2', BT.AromaticSingle), ('CH', 'HH3', BT.AromaticSingle), ('CN', 'HN1', BT.AromaticSingle),
+        ('CN', 'HN2', BT.AromaticSingle), ('CN', 'HN3', BT.AromaticSingle), ('OXT', 'HXT', BT.AromaticSingle), ],        
+    AA.DGL: [
+        ('N', 'H', BT.Single), ('N', 'H2', BT.Single), ('N', 'H3', BT.Single),
+        ('N', 'CA', BT.AromaticSingle), ('CA', 'C', BT.AromaticSingle), ('CA', 'CB', BT.AromaticSingle),
+        ('CA', 'HA', BT.AromaticSingle), ('C', 'O', BT.AromaticDouble), ('C', 'OXT', BT.AromaticSingle),
+        ('CB', 'CG', BT.AromaticSingle), ('CB', 'HB2', BT.AromaticSingle), ('CB', 'HB3', BT.AromaticSingle),
+        ('CG', 'CD', BT.AromaticSingle), ('CG', 'HG2', BT.AromaticSingle), ('CG', 'HG3', BT.AromaticSingle),
+        ('CD', 'OE1', BT.AromaticDouble), ('CD', 'OE2', BT.AromaticSingle), ('OE2', 'HE2', BT.AromaticSingle),
+        ('OXT', 'HXT', BT.AromaticSingle), ],
+    AA.DPR: [
+        ('N', 'H', BT.Single), ('N', 'H2', BT.Single), ('N', 'H3', BT.Single),
+        ('N', 'CA', BT.AromaticSingle), ('N', 'CD', BT.AromaticSingle), ('CA', 'C', BT.AromaticSingle),
+        ('CA', 'CB', BT.AromaticSingle), ('CA', 'HA', BT.AromaticSingle), ('C', 'O', BT.AromaticDouble),
+        ('C', 'OXT', BT.AromaticSingle), ('CB', 'CG', BT.AromaticSingle), ('CB', 'HB2', BT.AromaticSingle),
+        ('CB', 'HB3', BT.AromaticSingle), ('CG', 'CD', BT.AromaticSingle), ('CG', 'HG2', BT.AromaticSingle),
+        ('CG', 'HG3', BT.AromaticSingle), ('CD', 'HD2', BT.AromaticSingle), ('CD', 'HD3', BT.AromaticSingle),
+        ('OXT', 'HXT', BT.AromaticSingle), ],
+    AA.DTR: [
+        ('N', 'H', BT.Single), ('N', 'H2', BT.Single), ('N', 'H3', BT.Single),
+        ('N', 'CA', BT.AromaticSingle), ('CA', 'C', BT.AromaticSingle), ('CA', 'CB', BT.AromaticSingle),
+        ('CA', 'HA', BT.AromaticSingle), ('C', 'O', BT.AromaticDouble), ('C', 'OXT', BT.AromaticSingle),
+        ('CB', 'CG', BT.AromaticSingle), ('CB', 'HB2', BT.AromaticSingle), ('CB', 'HB3', BT.AromaticSingle),
+        ('CG', 'CD1', BT.AromaticDouble), ('CG', 'CD2', BT.AromaticSingle), ('CD1', 'NE1', BT.AromaticSingle),
+        ('CD1', 'HD1', BT.AromaticSingle), ('CD2', 'CE2', BT.AromaticDouble), ('CD2', 'CE3', BT.AromaticSingle),
+        ('NE1', 'CE2', BT.AromaticSingle), ('NE1', 'HE1', BT.AromaticSingle), ('CE2', 'CZ2', BT.AromaticSingle),
+        ('CE3', 'CZ3', BT.AromaticDouble), ('CE3', 'HE3', BT.AromaticSingle), ('CZ2', 'CH2', BT.AromaticDouble),
+        ('CZ2', 'HZ2', BT.AromaticSingle), ('CZ3', 'CH2', BT.AromaticSingle), ('CZ3', 'HZ3', BT.AromaticSingle),
+        ('CH2', 'HH2', BT.AromaticSingle), ('OXT', 'HXT', BT.AromaticSingle), ],                    
     AA.UNK: [],
 }
 
@@ -439,7 +642,7 @@ restype_to_heavyatom_bond_matrix = {
 def _make_bond_matrices():
     for restype in AA:
         for atom1_name, atom2_name, bond_type in restype_to_bonded_atom_name_pairs[restype]:
-            idx1 = restype_to_allatom_names[restype].index(atom1_name)
+            idx1 = restype_to_allatom_names[restype].index(atom1_name)            
             idx2 = restype_to_allatom_names[restype].index(atom2_name)
             restype_to_allatom_bond_matrix[restype][idx1, idx2] = bond_type
             restype_to_allatom_bond_matrix[restype][idx2, idx1] = bond_type
@@ -501,62 +704,120 @@ chi_angles_atoms = {
     AA.PTR: [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD1'],
              ['CE1', 'CZ', 'OH', 'P'], ['CZ', 'OH', 'P', 'O1P']],
     AA.VAL: [['N', 'CA', 'CB', 'CG1']],
+    AA.MLE: [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD1'],
+             ['C', 'CA', 'N', 'CN']],
+    AA.M3L: [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD'],
+             ['CB', 'CG', 'CD', 'CE'], ['CG', 'CD', 'CE', 'NZ'],
+             ['CD', 'CE', 'NZ', 'CM1']],
+    AA.ALY: [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD'],
+             ['CB', 'CG', 'CD', 'CE'], ['CG', 'CD', 'CE', 'NZ'],
+             ['CD', 'CE', 'NZ', 'CH'], ['CE', 'NZ', 'CH', 'CH3']], 
+    AA.TPO: [['N', 'CA', 'CB', 'OG1'], ['CA', 'CB', 'OG1', 'P'],
+             ['CB', 'OG1', 'P', 'O1P']],
+    AA.DAL: [],
+    AA.HYP: [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD']],
+    AA.MVA: [['N', 'CA', 'CB', 'CG1'], ['C', 'CA', 'N', 'CN']],
+    AA.DLY: [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD'],
+             ['CB', 'CG', 'CD', 'CE'], ['CG', 'CD', 'CE', 'NZ']],
+    AA.DLE: [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD1']],
+    AA.SAR: [['C', 'CA', 'N', 'CN']],
+    AA.NLE: [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD'],
+             ['CB', 'CG', 'CD', 'CE']],
+    AA.BMT: [['N', 'CA', 'CB', 'OG1'], ['CA', 'CB', 'CG2', 'CD2'],
+             ['CB', 'CG2', 'CD2', 'CE'], ['CG2', 'CD2', 'CE', 'CZ'],
+             ['C', 'CA', 'N', 'CN']],
+    AA.DGL: [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD'],
+             ['CB', 'CG', 'CD', 'OE1']],
+    AA.DPR: [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD']],
+    AA.DTR: [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD1']],                                                    
+
 }
 
 chi_angles_mask = {
-    AA.ALA: [False, False, False, False],  # ALA
-    AA.ARG: [True, True, True, True],  # ARG
-    AA.ASN: [True, True, False, False],  # ASN
-    AA.ASP: [True, True, False, False],  # ASP
-    AA.CYS: [True, False, False, False],  # CYS
-    AA.GLN: [True, True, True, False],  # GLN
-    AA.GLU: [True, True, True, False],  # GLU
-    AA.GLY: [False, False, False, False],  # GLY
-    AA.HIS: [True, True, False, False],  # HIS
-    AA.ILE: [True, True, False, False],  # ILE
-    AA.LEU: [True, True, False, False],  # LEU
-    AA.LYS: [True, True, True, True],  # LYS
-    AA.MET: [True, True, True, False],  # MET
-    AA.PHE: [True, True, False, False],  # PHE
-    AA.PRO: [True, True, False, False],  # PRO
-    AA.SER: [True, False, False, False],  # SER
-    AA.SEP: [True, True, True, False],  # SEP
-    AA.THR: [True, False, False, False],  # THR
-    AA.TRP: [True, True, False, False],  # TRP
-    AA.TYR: [True, True, False, False],  # TYR
-    AA.TYS: [True, True, True, True],  # TYS
-    AA.PTR: [True, True, True, True],  # PTR
-    AA.VAL: [True, False, False, False],  # VAL
-    AA.UNK: [False, False, False, False],  # UNK
+    AA.ALA: [False, False, False, False, False, False],  # ALA
+    AA.ARG: [True, True, True, True, False, False],  # ARG
+    AA.ASN: [True, True, False, False, False, False],  # ASN
+    AA.ASP: [True, True, False, False, False, False],  # ASP
+    AA.CYS: [True, False, False, False, False, False],  # CYS
+    AA.GLN: [True, True, True, False, False, False],  # GLN
+    AA.GLU: [True, True, True, False, False, False],  # GLU
+    AA.GLY: [False, False, False, False, False, False],  # GLY
+    AA.HIS: [True, True, False, False, False, False],  # HIS
+    AA.ILE: [True, True, False, False, False, False],  # ILE
+    AA.LEU: [True, True, False, False, False, False],  # LEU
+    AA.LYS: [True, True, True, True, False, False],  # LYS
+    AA.MET: [True, True, True, False, False, False],  # MET
+    AA.PHE: [True, True, False, False, False, False],  # PHE
+    AA.PRO: [True, True, False, False, False, False],  # PRO
+    AA.SER: [True, False, False, False, False, False],  # SER
+    AA.SEP: [True, True, True, False, False, False],  # SEP
+    AA.THR: [True, False, False, False, False, False],  # THR
+    AA.TRP: [True, True, False, False, False, False],  # TRP
+    AA.TYR: [True, True, False, False, False, False],  # TYR
+    AA.TYS: [True, True, True, True, False, False],  # TYS
+    AA.PTR: [True, True, True, True, False, False],  # PTR
+    AA.VAL: [True, False, False, False, False, False],  # VAL
+    AA.MLE: [True, True, True, False, False, False],  # MLE, 23
+    AA.M3L: [True, True, True, True, True, False],
+    AA.ALY: [True, True, True, True, True, True],
+    AA.TPO: [True, True, True, False, False, False],
+    AA.DAL: [False, False, False, False, False, False],
+    AA.HYP: [True, True, False, False, False, False],
+    AA.MVA: [True, True, False, False, False, False],  # MVA, 29
+    AA.DLY: [True, True, True, True, False, False],
+    AA.DLE: [True, True, False, False, False, False],
+    AA.SAR: [True, False, False, False, False, False],
+    AA.NLE: [True, True, True, False, False, False],
+    AA.BMT: [True, True, True, True, True, False],
+    AA.DGL: [True, True, True, False, False, False],
+    AA.DPR: [True, True, False, False, False, False],
+    AA.DTR: [True, True, False, False, False, False],
+    AA.UNK: [False, False, False, False, False, False],  # UNK
 }
 
 chi_pi_periodic = {
-    AA.ALA: [False, False, False, False],  # ALA
-    AA.ARG: [False, False, False, False],  # ARG
-    AA.ASN: [False, False, False, False],  # ASN
-    AA.ASP: [False, True, False, False],  # ASP
-    AA.CYS: [False, False, False, False],  # CYS
-    AA.GLN: [False, False, False, False],  # GLN
-    AA.GLU: [False, False, True, False],  # GLU
-    AA.GLY: [False, False, False, False],  # GLY
-    AA.HIS: [False, False, False, False],  # HIS
-    AA.ILE: [False, False, False, False],  # ILE
-    AA.LEU: [False, False, False, False],  # LEU
-    AA.LYS: [False, False, False, False],  # LYS
-    AA.MET: [False, False, False, False],  # MET
-    AA.PHE: [False, True, False, False],  # PHE
-    AA.PRO: [False, False, False, False],  # PRO
-    AA.SER: [False, False, False, False],  # SER
-    AA.SEP: [False, False, False, False],  # SEP
-    AA.THR: [False, False, False, False],  # THR
-    AA.TRP: [False, False, False, False],  # TRP
-    AA.TYR: [False, True, False, False],  # TYR
-    AA.TYS: [False, True, False, False],  # TYS
-    AA.PTR: [False, True, False, False],  # PTR
-    AA.VAL: [False, False, False, False],  # VAL
-    AA.UNK: [False, False, False, False],  # UNK
+    AA.ALA: [False, False, False, False, False, False],  # ALA
+    AA.ARG: [False, False, False, False, False, False],  # ARG
+    AA.ASN: [False, False, False, False, False, False],  # ASN
+    AA.ASP: [False, True, False, False, False, False],  # ASP
+    AA.CYS: [False, False, False, False, False, False],  # CYS
+    AA.GLN: [False, False, False, False, False, False],  # GLN
+    AA.GLU: [False, False, True, False, False, False],  # GLU
+    AA.GLY: [False, False, False, False, False, False],  # GLY
+    AA.HIS: [False, False, False, False, False, False],  # HIS
+    AA.ILE: [False, False, False, False, False, False],  # ILE
+    AA.LEU: [False, False, False, False, False, False],  # LEU
+    AA.LYS: [False, False, False, False, False, False],  # LYS
+    AA.MET: [False, False, False, False, False, False],  # MET
+    AA.PHE: [False, True, False, False, False, False],  # PHE
+    AA.PRO: [False, False, False, False, False, False],  # PRO
+    AA.SER: [False, False, False, False, False, False],  # SER
+    AA.SEP: [False, False, False, False, False, False],  # SEP
+    AA.THR: [False, False, False, False, False, False],  # THR
+    AA.TRP: [False, False, False, False, False, False],  # TRP
+    AA.TYR: [False, True, False, False, False, False],  # TYR
+    AA.TYS: [False, True, False, False, False, False],  # TYS
+    AA.PTR: [False, True, False, False, False, False],  # PTR
+    AA.VAL: [False, False, False, False, False, False],  # VAL
+    AA.MLE: [False, False, False, False, False, False],
+    AA.M3L: [False, False, False, False, False, False],
+    AA.ALY: [False, False, False, False, False, False],
+    AA.TPO: [False, False, False, False, False, False],
+    AA.DAL: [False, False, False, False, False, False],
+    AA.HYP: [False, False, False, False, False, False],
+    AA.MVA: [False, False, False, False, False, False],
+    AA.DLY: [False, False, False, False, False, False],
+    AA.DLE: [False, False, False, False, False, False],
+    AA.SAR: [False, False, False, False, False, False],
+    AA.NLE: [False, False, False, False, False, False],
+    AA.BMT: [False, False, False, False, False, False],
+    AA.DGL: [False, False, True, False, False, False],
+    AA.DPR: [False, False, False, False, False, False],
+    AA.DTR: [False, False, False, False, False, False],
+    AA.UNK: [False, False, False, False, False, False],  # UNK
 }
 
+# 10: rigid group of CN
 rigid_group_heavy_atom_positions = {
     AA.ALA: [
         ['N', 0, (-0.525, 1.363, 0.000)],
@@ -707,7 +968,6 @@ rigid_group_heavy_atom_positions = {
         ['CB', 0, (-0.546, -0.611, -1.293)],
         ['O', 3, (0.621, -1.066, 0.000)],
         ['CG', 4, (0.382, 1.445, 0.0)],
-        # ['CD', 5, (0.427, 1.440, 0.0)],
         ['CD', 5, (0.477, 1.424, 0.0)],  # manually made angle 2 degrees larger
     ],
     AA.SER: [
@@ -814,11 +1074,180 @@ rigid_group_heavy_atom_positions = {
         ['CG1', 4, (0.540, 1.429, -0.000)],
         ['CG2', 4, (0.533, -0.776, 1.203)],
     ],
+    AA.MLE: [
+        ['N', 0, (-0.534, 1.370, 0.000)],
+        ['CA', 0, (0.000, 0.000, 0.000)],
+        ['C', 0, (1.525, -0.000, -0.000)],
+        ['CB', 0, (-0.537, -0.597, -1.302)],
+        ['O', 3, (0.625, -1.063, -0.000)],
+        ['CG', 4, (0.645, 1.388, 0.000)],
+        ['CD1', 5, (0.510, 1.422, -0.000)],
+        ['CD2', 5, (0.524, -0.747, 1.221)],
+        ['CN', 6, (0.760, -1.291, 0.000)]  # Chi3
+    ],  # 2oju
+    AA.M3L: [
+        ['N', 0, (-0.549, 1.348, -0.000)],
+        ['CA', 0, (0.000, 0.000, 0.000)],
+        ['C', 0, (1.534, 0.000, 0.000)],
+        ['CB', 0, (-0.518, -0.747, -1.234)],
+        ['O', 3, (0.638, -1.060, -0.000)],
+        ['CG', 4, (0.640, 1.370, 0.000)],
+        ['CD', 5, (0.544, 1.419, 0.000)],
+        ['CE', 6, (0.605, 1.412, 0.000)],
+        ['NZ', 7, (0.489, 1.394, 0.002)],
+        ['CM1', 8, (0.497, 1.415, -0.001)],
+        ['CM2', 8, (0.449, -0.722, -1.210)],
+        ['CM3', 8, (0.689, -0.680, 1.119)],
+    ],  # 3mp1
+    AA.ALY: [
+        ['N', 0, (-0.389, 1.401, -0.000)],
+        ['CA', 0, (0.000, 0.000, 0.000)],
+        ['C', 0, (1.534, 0.000, 0.000)],
+        ['CB', 0, (-0.528, -0.564, -1.326)],
+        ['O', 3, (0.520, -1.103, -0.000)],
+        ['CG', 4, (0.569, 1.384, 0.000)],
+        ['CD', 5, (0.423, 1.481, 0.000)],
+        ['CE', 6, (0.564, 1.423, 0.000)],
+        ['NZ', 7, (0.516, 1.368, 0.001)],
+        ['CH', 8, (0.706, 1.121, 0.000)],
+        ['OH', 9, (0.604, -1.030, 0.048)],
+        ['CH3', 9, (0.738, 1.305, 0.000)],
+    ],  # 4fz3
+    AA.TPO: [
+        ['N', 0, (-0.574, 1.352, 0.000)],
+        ['CA', 0, (0.000, 0.000, 0.000)],
+        ['C', 0, (1.529, 0.000, -0.000)],
+        ['CB', 0, (-0.678, -0.626, -1.236)],
+        ['O', 3, (0.628, -1.060, 0.000)],
+        ['CG2', 4, (0.673, -0.705, -1.194)],
+        ['OG1', 4, (0.329, 1.419, 0.000)],
+        ['P', 5, (0.722, 1.378, 0.000)],
+        ['O1P', 6, (0.427, 1.484, -0.001)],
+        ['O2P', 6, (0.461, -0.694, -1.292)],
+        ['O3P', 6, (0.610, -0.703, 1.197)],
+    ],  # 6gy2
+    AA.DAL: [
+        ['N', 0, (-0.412, 1.394, 0.000)],
+        ['CA', 0, (0.000, 0.000, 0.000)],
+        ['C', 0, (1.513, -0.000, -0.000)],
+        ['CB', 0, (-0.553, -0.728, 1.213)],
+        ['O', 3, (0.608, -1.069, 0.000)],
+    ],  # 2oju
+    AA.HYP: [
+        ['N', 0, (-0.505, 1.377, -0.000)],
+        ['CA', 0, (0.000, 0.000, 0.000)],
+        ['C', 0, (1.507, -0.000, 0.000)],
+        ['CB', 0, (-0.490, -0.671, -1.282)],
+        ['O', 3, (0.584, -1.059, 0.000)],
+        ['CG', 4, (0.375, 1.476, 0.0)],
+        ['CD', 5, (0.697, 1.462, 0.0)],
+        ['OD1', 5, (0.489, -0.638, -1.154)],
+    ],  # 7tpt_1_III
+    AA.MVA: [
+        ['N', 0, (-0.439, 1.400, -0.000)],
+        ['CA', 0, (0.000, 0.000, 0.000)],
+        ['C', 0, (1.515, -0.000, -0.000)],
+        ['CB', 0, (-0.521, -0.848, -1.177)],
+        ['O', 3, (0.631, -1.059, -0.000)],
+        ['CG1', 4, (0.532, 1.422, -0.000)],
+        ['CG2', 4, (0.519, -0.743, -1.224)],  # 1.224?
+        ['CN', 5, (0.737, -1.301, 0.000)],  # Chi2
+    ],  # 2oju
+    AA.DLY: [
+        ['N', 0, (-0.695, 1.262, -0.000)],
+        ['CA', 0, (0.000, 0.000, 0.000)],
+        ['C', 0, (1.519, 0.000, 0.000)],
+        ['CB', 0, (-0.468, -0.714, 1.279)],
+        ['O', 3, (0.565, -1.096, -0.000)],
+        ['CG', 4, (0.732, 1.342, 0.000)],
+        ['CD', 5, (0.603, 1.401, 0.000)],
+        ['CE', 6, (0.555, 1.423, 0.000)],
+        ['NZ', 7, (0.593, 1.370, 0.000)],
+    ],  # 5ney
+    AA.DLE: [
+        ['N', 0, (-0.524, 1.358, 0.000)],
+        ['CA', 0, (0.000, 0.000, 0.000)],
+        ['C', 0, (1.527, -0.000, -0.000)],
+        ['CB', 0, (-0.514, -0.774, 1.217)],
+        ['O', 3, (0.621, -1.059, -0.000)],
+        ['CG', 4, (0.671, 1.371, 0.001)],
+        ['CD1', 5, (0.534, 1.420, -0.000)],
+        ['CD2', 5, (0.541, -0.794, 1.182)],
+    ],  # 6q8g
+    AA.SAR: [
+        ['N', 0, (-0.544, 1.353, 0.000)],
+        ['CA', 0, (0.000, 0.000, 0.000)],
+        ['C', 0, (1.527, -0.000, -0.000)],
+        ['O', 3, (0.627, -1.064, -0.000)],
+        ['CN', 4, (0.656, 1.348, 0.000)],  # Chi1
+    ],  # 2oju
+    AA.NLE: [
+        ['N', 0, (-0.710, 1.279, 0.000)],
+        ['CA', 0, (0.000, 0.000, 0.000)],
+        ['C', 0, (1.547, -0.000, -0.000)],
+        ['CB', 0, (-0.599, -0.795, -1.177)],
+        ['O', 3, (0.655, -1.071, -0.000)],
+        ['CG', 4, (0.584, 1.426, -0.000)],
+        ['CD', 5, (0.585, 1.419, 0.000)],
+        ['CE', 6, (0.664, 1.382, -0.002)],
+    ],  # 4y1d
+    AA.BMT: [
+        ['N', 0, (-0.561, 1.354, 0.000)],
+        ['CA', 0, (0.000, 0.000, 0.000)],
+        ['C', 0, (1.515, 0.000, -0.000)],
+        ['CB', 0, (-0.558, -0.872, -1.197)],
+        ['O', 3, (0.623, -1.063, 0.000)],
+        ['CG2', 4, (0.629, -0.774, -1.223)],
+        ['OG1', 4, (0.473, 1.369, 0.000)],
+        ['CD1', 5, (0.595, -0.861, 1.148)],
+        ['CD2', 5, (0.684, 1.385, 0.000)],
+        ['CE', 6, (0.698, 1.365, 0.000)],
+        ['CZ', 7, (0.734, 1.217, 0.000)],
+        ['CH', 7, (2.257, 1.192, -0.002)],
+        ['CN', 8, (0.777, -1.271, 0.000)],  # Chi5
+    ],  # 2oju                
+    AA.DGL: [
+        ['N', 0, (-0.611, 1.330, 0.000)],
+        ['CA', 0, (0.000, 0.000, 0.000)],
+        ['C', 0, (1.525, -0.000, -0.000)],
+        ['CB', 0, (-0.568, -0.913, 1.104)],
+        ['O', 3, (0.587, -1.103, 0.000)],
+        ['CG', 4, (0.608, 1.413, 0.000)],
+        ['CD', 5, (0.590, 1.379, 0.000)],
+        ['OE1', 6, (0.668, 1.018, -0.000)],
+        ['OE2', 6, (0.509, -1.208, -0.006)],
+    ],  # 4thn
+    AA.DPR: [
+        ['N', 0, (-0.542, 1.375, -0.000)],
+        ['CA', 0, (0.000, 0.000, 0.000)],
+        ['C', 0, (1.544, -0.000, 0.000)],
+        ['CB', 0, (-0.570, -0.622, 1.289)],
+        ['O', 3, (0.602, -1.080, 0.000)],
+        ['CG', 4, (0.425, 1.450, 0.000)],
+        ['CD', 5, (0.427, 1.433, 0.000)],
+    ],  # 6qfk
+    AA.DTR: [
+        ['N', 0, (-0.603, 1.305, 0.000)],
+        ['CA', 0, (0.000, 0.000, 0.000)],
+        ['C', 0, (1.528, -0.000, 0.000)],
+        ['CB', 0, (-0.372, -0.625, 1.353)],
+        ['O', 3, (0.662, -1.005, 0.000)],
+        ['CG', 4, (0.563, 1.459, -0.000)],
+        ['CD1', 5, (0.779, 1.109, 0.001)],
+        ['CD2', 5, (0.819, -1.313, -0.006)],
+        ['CE2', 5, (2.216, -0.758, -0.005)],
+        ['CE3', 5, (0.654, -2.701, -0.008)],
+        ['NE1', 5, (1.986, 0.626, -0.006)],
+        ['CH2', 5, (3.104, -2.997, -0.022)],
+        ['CZ2', 5, (3.314, -1.621, -0.017)],
+        ['CZ3', 5, (1.826, -3.521, -0.011)],
+    ],  # 5ney
 }
 
 # The following tensors are initialized by `_make_rigid_group_constants`
-restype_rigid_group_rotation = torch.zeros([PAD_RESIDUE_INDEX, 8, 3, 3])
-restype_rigid_group_translation = torch.zeros([PAD_RESIDUE_INDEX, 8, 3])
+num_rigid_groups = 10  # 8
+restype_rigid_group_rotation = torch.zeros([PAD_RESIDUE_INDEX, num_rigid_groups, 3, 3])
+restype_rigid_group_translation = torch.zeros([PAD_RESIDUE_INDEX, num_rigid_groups, 3])
 restype_heavyatom_to_rigid_group = torch.zeros([PAD_RESIDUE_INDEX, max_num_heavyatoms-1], dtype=torch.long)
 restype_heavyatom_rigid_group_positions = torch.zeros([PAD_RESIDUE_INDEX, max_num_heavyatoms-1, 3])
 
@@ -889,7 +1318,7 @@ def _make_rigid_group_constants():
         # chi2-chi1
         # chi3-chi2
         # chi4-chi3
-        for chi_idx in range(1, 4):
+        for chi_idx in range(1, 6):
             if chi_angles_mask[restype][chi_idx]:
                 axis_end_atom_name = chi_angles_atoms[restype][chi_idx][2]
                 axis_end_atom_position = atom_positions[axis_end_atom_name]

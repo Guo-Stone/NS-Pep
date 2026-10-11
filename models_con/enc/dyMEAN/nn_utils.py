@@ -260,6 +260,7 @@ class AminoAcidFeature(nn.Module):
                     atom_type = atom_type + [VOCAB.atom_to_idx(atom[0]) for atom in sidechain_atoms]
                     atom_pos = atom_pos + [VOCAB.atom_pos_to_idx(atom[1]) for atom in sidechain_atoms]
 
+
                 num_pad = n_channel - len(atom_type)
                 residue_atom_type.append(atom_type + [self.atom_pad_idx for _ in range(num_pad)])
                 residue_atom_pos.append(atom_pos + [self.atom_pos_pad_idx for _ in range(num_pad)])

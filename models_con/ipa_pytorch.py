@@ -685,10 +685,7 @@ class InvariantPointAttention(nn.Module):
         a = a + pt_att
         a = a + square_mask.unsqueeze(-3)
         a = self.softmax(a)
-        # DEBUG
-        # attn_matrix = tmp.mean(dim=1)  # torch.topk(attn_matrix[0, 12, -9:], k=5) 3rm0_I [-7, -29, -11:]
-        # pdb.set_trace()
-        # DEBUG
+
         ################
         # Compute output
         ################

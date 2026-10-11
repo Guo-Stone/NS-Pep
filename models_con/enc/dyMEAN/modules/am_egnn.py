@@ -373,7 +373,10 @@ def coord2radial(edge_index, coord, attr, channel_weights, linear_map, rbf_linea
         radial = torch.bmm(
             attr[seg_row].transpose(-1, -2),  # [n_edge, attr_size, n_channel]
             coord_msg)  # [n_edge, attr_size, n_channel]
-        radial = torch.bmm(radial, attr[seg_col])  # [n_edge, attr_size, attr_size]
+        try:
+            radial = torch.bmm(radial, attr[seg_col])  # [n_edge, attr_size, attr_size]
+        except RuntimeError:
+            pdb.set_trace()
         radial = radial.reshape(radial.shape[0], -1)  # [n_edge, attr_size * attr_size]
         if rbf_linear:  # do not need normalization
             radial = linear_map(radial)

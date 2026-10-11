@@ -42,7 +42,7 @@ model:
       sample_schedule: linear
       sigma: 1.0
     seqs:
-      num_classes: 23
+      num_classes: 38
       simplex_value: 5.0
     sampling:
       num_timesteps: 100
@@ -56,13 +56,13 @@ train:
     seqs_loss: 1.0
     angle_loss: 1.0
     torsion_loss: 0.5
-    sctrans_loss: 0.1  # 0.1
-  max_iters: 320000  # 40000
+    sctrans_loss: 0.01  # 0.1
+  max_iters: 320000  # 320k ~ 2 days
   val_freq: 5000  # 5000
-  save_freq: 40000  # Frequency of saving ckpt
-  batch_size: 32  # 256 (32 * 8)
+  save_freq: 80000  # Frequency of saving ckpt
+  batch_size: 32  # 32
   accum_grad: 1
-  seed: 114514
+  seed: 114514  # 114514
   max_grad_norm: 100.0
   optimizer:
     type: adam
@@ -72,22 +72,22 @@ train:
     beta2: 0.999
   scheduler:
     type: plateau
-    factor: 0.8  # 0.8
+    factor: 0.8  # 0.8, 0.95
     patience: 10
     min_lr: 5.e-6
 
 dataset:
-  split: /ibex/user/guot0b/PepFlowww-NS3/data/data_split_NS3_v3.json
+  split: /ibex/user/guot0b/PepFlowww-NS18/data/data_split_NS18_v4_seed1177_curated.json  # data_split_NS3_v3.json
   train:
     type: peprec
     structure_dir: /ibex/user/guot0b/DataPool/Pepflow/
-    dataset_dir: /ibex/user/guot0b/PepFlowww-NS3/data/Dataset_NS3/  # NoscPep, NS3
-    name: NS3_TRAIN
+    dataset_dir: /ibex/user/guot0b/PepFlowww-NS18/data/Dataset_NS18_v4_seed1177/  # Dataset_NS3, NoscPep, NS3
+    name: NS18_TRAIN  # NS3_TRAIN
     reset: False  # False
     tao_repr: True  # Whether to use our representation: True, False
   val:
     type: peprec
     structure_dir: /ibex/user/guot0b/DataPool/Pepflow/
-    dataset_dir: /ibex/user/guot0b/PepFlowww-NS3/data/Dataset_NS3/
-    name: NS3_VAL
+    dataset_dir: /ibex/user/guot0b/PepFlowww-NS18/data/Dataset_NS18_v4_seed1177/
+    name: NS18_TEST
     reset: False

@@ -33,7 +33,7 @@ def _get_torsion(p0, p1, p2, p3):
 
 
 def get_chi_angles(restype, pos14):
-    chi_angles = torch.full([4], fill_value=float("inf")).to(pos14)
+    chi_angles = torch.full([len(constants.chi_angles_mask[constants.AA.ALA])], fill_value=float("inf")).to(pos14)
     base_atom_names = constants.chi_angles_atoms[restype]
     for i, four_atom_names in enumerate(base_atom_names):
         atom_indices = [constants.restype_atom14_name_to_index[restype][a] for a in four_atom_names]
@@ -42,6 +42,7 @@ def get_chi_angles(restype, pos14):
         #     continue
         torsion = _get_torsion(*torch.unbind(p, dim=0))
         chi_angles[i] = torsion
+   
     return chi_angles
 
 
@@ -58,8 +59,8 @@ def get_torsion_angle(pos14: torch.Tensor, aa: torch.LongTensor):
             torsion_this = torch.cat([psi, chi], dim=0)
             torsion_mask_this = torsion_this.isfinite()
         else:
-            torsion_this = torch.full([5], 0.)
-            torsion_mask_this = torch.full([5], False)
+            torsion_this = torch.full([len(constants.chi_angles_mask[constants.AA.ALA])+1], 0.)
+            torsion_mask_this = torch.full([len(constants.chi_angles_mask[constants.AA.ALA])+1], False)
         torsion.append(torsion_this.nan_to_num(posinf=0.))
         torsion_mask.append(torsion_mask_this)
 
@@ -108,8 +109,8 @@ def _get_rigid_group(aa: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torc
     """
     batch_size, n_res = aa.size()
     aa = aa.flatten()
-    rotation = constants.restype_rigid_group_rotation.to(aa.device)[aa].reshape(batch_size, n_res, 8, 3, 3)
-    translation = constants.restype_rigid_group_translation.to(aa.device)[aa].reshape(batch_size, n_res, 8, 3)
+    rotation = constants.restype_rigid_group_rotation.to(aa.device)[aa].reshape(batch_size, n_res, constants.num_rigid_groups, 3, 3)
+    translation = constants.restype_rigid_group_translation.to(aa.device)[aa].reshape(batch_size, n_res, constants.num_rigid_groups, 3)
     atom14_group = constants.restype_heavyatom_to_rigid_group.to(aa.device)[aa].\
         reshape(batch_size, n_res, constants.max_num_heavyatoms-1)
     atom14_position = constants.restype_heavyatom_rigid_group_positions.to(aa.device)[aa].reshape(
@@ -171,7 +172,7 @@ def full_atom_reconstruction(
     """
     N, L = aa.size()
 
-    rot_psi, rot_chi1, rot_chi2, rot_chi3, rot_chi4 = _make_psi_chi_rotation_matrices(angles).unbind(dim=2)
+    rot_psi, rot_chi1, rot_chi2, rot_chi3, rot_chi4, rot_chi5, rot_chi6 = _make_psi_chi_rotation_matrices(angles).unbind(dim=2)
     # (B, N, 3, 3)
     zeros = torch.zeros_like(t_bb)
 
@@ -195,18 +196,20 @@ def full_atom_reconstruction(
             (rot_chi1, zeros),  # Rigid transform based on torsion angle, firstly
         ]
     )  # CHI1 rotate along the direction of CA->CB, so rigid_trans is the trans of CB
-
+    R_chi1_ = torch.where((aa==int(constants.AA.MVA))[..., None, None], R_bb, R_chi1)
+    t_chi1_ = torch.where((aa==int(constants.AA.MVA))[..., None], t_bb, t_chi1)  # for CN atom
     R_chi2, t_chi2 = compose_chain(
         [
-            (R_chi1, t_chi1),
+            (R_chi1_, t_chi1_),
             (rigid_rotation[:, :, constants.CHI2_FRAME], rigid_translation[:, :, constants.CHI2_FRAME]),
             (rot_chi2, zeros),
         ]  # If LYS, CHI2 rotate along the direction of CB->CG, so rigid_trans is the trans of CG
     )
-
+    R_chi2_ = torch.where((aa==int(constants.AA.MLE))[..., None, None], R_bb, R_chi2)
+    t_chi2_ = torch.where((aa==int(constants.AA.MLE))[..., None], t_bb, t_chi2)
     R_chi3, t_chi3 = compose_chain(
         [
-            (R_chi2, t_chi2),
+            (R_chi2_, t_chi2_),
             (rigid_rotation[:, :, constants.CHI3_FRAME], rigid_translation[:, :, constants.CHI3_FRAME]),
             (rot_chi3, zeros),
         ]
@@ -219,14 +222,31 @@ def full_atom_reconstruction(
             (rot_chi4, zeros),
         ]
     )
+    R_chi4_ = torch.where((aa==int(constants.AA.BMT))[..., None, None], R_bb, R_chi4)
+    t_chi4_ = torch.where((aa==int(constants.AA.BMT))[..., None], t_bb, t_chi4)
+    R_chi5, t_chi5 = compose_chain(
+        [
+            (R_chi4_, t_chi4_),
+            (rigid_rotation[:, :, constants.CHI5_FRAME], rigid_translation[:, :, constants.CHI5_FRAME]),
+            (rot_chi5, zeros),
+        ]
+    )
+
+    R_chi6, t_chi6 = compose_chain(
+        [
+            (R_chi5, t_chi5),
+            (rigid_rotation[:, :, constants.CHI6_FRAME], rigid_translation[:, :, constants.CHI6_FRAME]),
+            (rot_chi6, zeros),
+        ]
+    )
 
     # Return Frame
-    R_ret = torch.stack([R_bb, R_psi, R_chi1, R_chi2, R_chi3, R_chi4], dim=2)
-    t_ret = torch.stack([t_bb, t_psi, t_chi1, t_chi2, t_chi3, t_chi4], dim=2)
+    R_ret = torch.stack([R_bb, R_psi, R_chi1, R_chi2, R_chi3, R_chi4, R_chi5, R_chi6], dim=2)
+    t_ret = torch.stack([t_bb, t_psi, t_chi1, t_chi2, t_chi3, t_chi4, t_chi5, t_chi6], dim=2)
 
     # Backbone, Omega, Phi, Psi, Chi1,2,3,4
-    R_all = torch.stack([R_bb, R_bb, R_bb, R_psi, R_chi1, R_chi2, R_chi3, R_chi4], dim=2)  # (B, N, 8, 3, 3)
-    t_all = torch.stack([t_bb, t_bb, t_bb, t_psi, t_chi1, t_chi2, t_chi3, t_chi4], dim=2)  # (B, N, 8, 3)
+    R_all = torch.stack([R_bb, R_bb, R_bb, R_psi, R_chi1, R_chi2, R_chi3, R_chi4, R_chi5, R_chi6], dim=2)  # (B, N, 8, 3, 3)
+    t_all = torch.stack([t_bb, t_bb, t_bb, t_psi, t_chi1, t_chi2, t_chi3, t_chi4, t_chi5, t_chi6], dim=2)  # (B, N, 8, 3)
 
     index_R = atom14_group.reshape(N, L, constants.max_num_heavyatoms-1, 1, 1).repeat(1, 1, 1, 3, 3)  # (B, N, 14, 3, 3)
     index_t = atom14_group.reshape(N, L, constants.max_num_heavyatoms-1, 1).repeat(1, 1, 1, 3)  # (B, N, 14, 3)
@@ -235,15 +255,12 @@ def full_atom_reconstruction(
     t_atom = torch.gather(t_all, dim=2, index=index_t)  # (N, L, 14, 3)
     p_atom = atom14_position  # (N, L, 14, 3)
     pos14 = torch.matmul(R_atom, p_atom.unsqueeze(-1)).squeeze(-1) + t_atom
-    # DEBUG
-    # p_atom_inverse = torch.matmul(R_atom.transpose(-1, -2), (pos14 - t_atom).unsqueeze(-1)).squeeze(-1)
-    # p_atom_inverse = (pos14 - t_atom) @ R_atom
-    # DEBUG
+
     return pos14, R_ret, t_ret
 
 
 # torsions_mask = torch.zeros([22, 5]).float()  # 0-19, X, PAD
-torsions_mask = torch.zeros([constants.PAD_RESIDUE_INDEX+1, 5]).float()  # 0-20, X, PAD
+torsions_mask = torch.zeros([constants.PAD_RESIDUE_INDEX+1, len(constants.chi_angles_mask[constants.AA.ALA])+1]).float()  # 0-20, X, PAD
 # for i in range(21):
 for i in range(constants.PAD_RESIDUE_INDEX):
     torsions_mask[i] = torch.tensor([True] + constants.chi_angles_mask[i]).float()

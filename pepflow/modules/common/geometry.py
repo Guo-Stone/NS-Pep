@@ -461,7 +461,8 @@ def reconstruct_backbone(R, t, aa, chain_nb, res_nb, mask):
     # atom_coords = restype_heavyatom_rigid_group_positions.clone().to(t) # (21, 14, 3)
     bb_coords = backbone_atom_coordinates_tensor.clone().to(t)  # (21, 3, 3)
     oxygen_coord = bb_oxygen_coordinate_tensor.clone().to(t)    # (21, 3)
-    aa = aa.clamp(min=0, max=PAD_RESIDUE_INDEX-1)    # 20 for UNK
+    # aa = aa.clamp(min=0, max=PAD_RESIDUE_INDEX-1)    # 38 for UNK
+    aa = aa.clamp(min=0, max=20)  # 20 for UNK
 
     bb_coords = bb_coords[aa.flatten()].reshape(N, L, -1, 3)    # (N, L, 3, 3)
     oxygen_coord = oxygen_coord[aa.flatten()].reshape(N, L, -1)  # (N, L, 3)

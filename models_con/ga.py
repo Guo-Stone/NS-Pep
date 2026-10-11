@@ -13,8 +13,7 @@ from data import utils as du
 from models_con.utils import get_index_embedding, get_time_embedding
 
 import pepflow.modules.protein.constants as constants
-from pepflow.modules.common.layers import AngularEncoding, sample_from
-from pepflow.modules.common.geometry import construct_3d_basis
+from pepflow.modules.common.layers import AngularEncoding, sample_from, clampped_one_hot
 
 import math
 
@@ -136,6 +135,127 @@ class GAEncoder(nn.Module):
         return pred_rotmats1, pred_trans1, pred_angles1, pred_seqs1_prob
 
 
+class GAEncoder_NS18(nn.Module):
+    def __init__(self, ipa_conf):
+        super().__init__()
+        self._ipa_conf = ipa_conf
+
+        # angles
+        self.angles_embedder = AngularEncoding(num_funcs=12)  # 25*5=120, for competitive embedding size
+        num_torsion_angle = len(constants.chi_angles_mask[constants.AA.ALA]) + 1  # Plus torsion of O
+        self.angle_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, num_torsion_angle)
+            # nn.Linear(self._ipa_conf.c_s, 22)
+        )
+        
+        # for condition on current seq
+        self.current_seq_embedder = nn.Embedding(constants.PAD_RESIDUE_INDEX + 1,
+                                                 self._ipa_conf.c_s)
+        self.seq_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, constants.PAD_RESIDUE_INDEX - 1)
+            # nn.Linear(self._ipa_conf.c_s, 22)
+        )
+
+        # mixer
+        self.res_feat_mixer = nn.Sequential(
+            nn.Linear(3 * self._ipa_conf.c_s + self.angles_embedder.get_out_dim(in_dim=num_torsion_angle),
+                      self._ipa_conf.c_s),
+            nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s),
+        )
+
+        self.feat_dim = self._ipa_conf.c_s
+
+        # Attention trunk
+        self.trunk = nn.ModuleDict()
+        for b in range(self._ipa_conf.num_blocks):
+            self.trunk[f'ipa_{b}'] = ipa_pytorch.InvariantPointAttention(self._ipa_conf)
+            self.trunk[f'ipa_ln_{b}'] = nn.LayerNorm(self._ipa_conf.c_s)
+            tfmr_in = self._ipa_conf.c_s
+            tfmr_layer = torch.nn.TransformerEncoderLayer(
+                d_model=tfmr_in,
+                nhead=self._ipa_conf.seq_tfmr_num_heads,
+                dim_feedforward=tfmr_in,
+                batch_first=True,
+                dropout=0.0,
+                norm_first=False
+            )
+            self.trunk[f'seq_tfmr_{b}'] = torch.nn.TransformerEncoder(
+                tfmr_layer, self._ipa_conf.seq_tfmr_num_layers, enable_nested_tensor=False)
+            self.trunk[f'post_tfmr_{b}'] = ipa_pytorch.Linear(
+                tfmr_in, self._ipa_conf.c_s, init="final")
+            self.trunk[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
+                c=self._ipa_conf.c_s)
+            self.trunk[f'bb_update_{b}'] = ipa_pytorch.BackboneUpdate(
+                self._ipa_conf.c_s, use_rot_updates=True)
+
+            if b < self._ipa_conf.num_blocks - 1:
+                # No edge update on the last block.
+                edge_in = self._ipa_conf.c_z
+                self.trunk[f'edge_transition_{b}'] = ipa_pytorch.EdgeTransition(
+                    node_embed_size=self._ipa_conf.c_s,
+                    edge_embed_in=edge_in,
+                    edge_embed_out=self._ipa_conf.c_z,
+                )
+
+    def embed_t(self, timesteps, mask):
+        timestep_emb = get_time_embedding(
+            timesteps[:, 0],
+            self.feat_dim,
+            max_positions=2056
+        )[:, None, :].repeat(1, mask.shape[1], 1)
+        return timestep_emb
+
+    def forward(self, t, rotmats_t, trans_t, angles_t, seqs_t, node_embed, edge_embed, generate_mask, res_mask):
+        num_batch, num_res = seqs_t.shape
+
+        # incorperate current seq and timesteps
+        node_mask = res_mask
+        edge_mask = node_mask[:, None] * node_mask[:, :, None]
+
+        node_embed = self.res_feat_mixer(torch.cat(
+            [node_embed, self.current_seq_embedder(seqs_t), self.embed_t(t, node_mask),
+             self.angles_embedder(angles_t).reshape(num_batch, num_res, -1)], dim=-1))
+        node_embed = node_embed * node_mask[..., None]
+        curr_rigids = du.create_rigid(rotmats_t, trans_t)
+        for b in range(self._ipa_conf.num_blocks):
+            ipa_embed = self.trunk[f'ipa_{b}'](
+                node_embed,
+                edge_embed,
+                curr_rigids,
+                node_mask)
+            ipa_embed *= node_mask[..., None]
+            node_embed = self.trunk[f'ipa_ln_{b}'](node_embed + ipa_embed)
+            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
+                node_embed, src_key_padding_mask=(1 - node_mask).bool())
+            node_embed = node_embed + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
+            node_embed = self.trunk[f'node_transition_{b}'](node_embed)
+            node_embed = node_embed * node_mask[..., None]
+            rigid_update = self.trunk[f'bb_update_{b}'](
+                node_embed * node_mask[..., None])
+            curr_rigids = curr_rigids.compose_q_update_vec(
+                rigid_update, node_mask[..., None])
+
+            if b < self._ipa_conf.num_blocks - 1:
+                edge_embed = self.trunk[f'edge_transition_{b}'](
+                    node_embed, edge_embed)
+                edge_embed *= edge_mask[..., None]
+
+        # curr_rigids = self.rigids_nm_to_ang(curr_rigids)
+        pred_trans1 = curr_rigids.get_trans()
+        pred_rotmats1 = curr_rigids.get_rots().get_rot_mats()
+        pred_seqs1_prob = self.seq_net(node_embed)
+        pred_angles1 = self.angle_net(node_embed)
+        pred_angles1 = pred_angles1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
+
+        return pred_rotmats1, pred_trans1, pred_angles1, pred_seqs1_prob
+
+
+
 class GAEncoder_NS3(nn.Module):
     def __init__(self, ipa_conf):
         super().__init__()
@@ -255,66 +375,27 @@ class GAEncoder_NS3(nn.Module):
         return pred_rotmats1, pred_trans1, pred_angles1, pred_seqs1_prob
 
 
-class GAEncoder_NS3_seq(nn.Module):
-    def __init__(self, ipa_conf):
-        super().__init__()
-        self._ipa_conf = ipa_conf
-
-        # for condition on current seq
-        self.current_seq_embedder = nn.Embedding(constants.PAD_RESIDUE_INDEX + 1,
-                                                 self._ipa_conf.c_s)
-        self.seq_net = nn.Sequential(
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, constants.PAD_RESIDUE_INDEX - 1)
-            # nn.Linear(self._ipa_conf.c_s, 22)
-        )
-        
-        self.feat_dim = self._ipa_conf.c_s
-
-        # mixer
-        self.res_feat_mixer = nn.Sequential(
-            nn.Linear(3 * self._ipa_conf.c_s,
-                      self._ipa_conf.c_s),
-            nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s),
-        )
-
-
-    def embed_t(self, timesteps, mask):
-        timestep_emb = get_time_embedding(
-            timesteps[:, 0],
-            self.feat_dim,
-            max_positions=2056
-        )[:, None, :].repeat(1, mask.shape[1], 1)
-        return timestep_emb
-
-    def forward(self, t, seqs_t, node_embed, res_mask):
-        num_batch, num_res = seqs_t.shape
-        # incorperate current seq and timesteps
-        node_mask = res_mask
-
-        node_embed = self.res_feat_mixer(torch.cat(
-            [node_embed, self.current_seq_embedder(seqs_t), self.embed_t(t, node_mask)], dim=-1))
-
-        pred_seqs1_prob = self.seq_net(node_embed)
-
-        return pred_seqs1_prob
-
-
-class GAEncoder_NS3_noChi(nn.Module):
+class GAEncoder_NS18_PredChi_delta(nn.Module):
+    # Keep the model parameters similar to that of PepFlow
+    # Predict Chi and delta of scaa
     def __init__(self, ipa_conf):
         super().__init__()
         self._ipa_conf = ipa_conf
 
         # angles
-        self.angles_embedder = AngularEncoding(num_funcs=12)  # 25*5=120, for competitive embedding size
-        self.angle_net = nn.Sequential(
+        self.angles_embedder = AngularEncoding(num_funcs=12)
+        num_angle_O = 1  # Only for the O atom
+        self.angle_O_net = nn.Sequential(
             nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, 1)  # Only for O
-            # nn.Linear(self._ipa_conf.c_s, 22)
+            nn.Linear(self._ipa_conf.c_s, num_angle_O)
         )
+
+        num_angle_chi = len(constants.chi_angles_mask[constants.AA.ALA])  # Exclude the O atom
+        self.angle_chi_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, num_angle_chi)
+        )        
 
         # for condition on current seq
         self.current_seq_embedder = nn.Embedding(constants.PAD_RESIDUE_INDEX + 1,
@@ -323,12 +404,17 @@ class GAEncoder_NS3_noChi(nn.Module):
             nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
             nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
             nn.Linear(self._ipa_conf.c_s, constants.PAD_RESIDUE_INDEX - 1)
-            # nn.Linear(self._ipa_conf.c_s, 22)
+        )
+
+        self.sc_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, (constants.max_num_heavyatoms - 6) * 3)  # 3D coordinates of 11 side chain atoms
         )
 
         # mixer
         self.res_feat_mixer = nn.Sequential(
-            nn.Linear(3 * self._ipa_conf.c_s + self.angles_embedder.get_out_dim(in_dim=1),
+            nn.Linear(3 * self._ipa_conf.c_s + self.angles_embedder.get_out_dim(in_dim=num_angle_O),
                       self._ipa_conf.c_s),
             nn.ReLU(),
             nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s),
@@ -367,6 +453,7 @@ class GAEncoder_NS3_noChi(nn.Module):
                     edge_embed_in=edge_in,
                     edge_embed_out=self._ipa_conf.c_z,
                 )
+        self.chi_trunk = 2
 
     def embed_t(self, timesteps, mask):
         timestep_emb = get_time_embedding(
@@ -376,16 +463,20 @@ class GAEncoder_NS3_noChi(nn.Module):
         )[:, None, :].repeat(1, mask.shape[1], 1)
         return timestep_emb
 
-    def forward(self, t, rotmats_t, trans_t, angles_t, seqs_t, node_embed, edge_embed, generate_mask, res_mask):
+    def forward(self, t, rotmats_t, trans_t, angles_t, 
+                seqs_t, seqs_1, node_embed, edge_embed, 
+                generate_mask, res_mask, Train=True):
+        # Make sure that angles_t only contains the O atom angle
+        angles_O_t = angles_t[:, :, 0:1]  # Only keep the first angle (O atom angle)
         num_batch, num_res = seqs_t.shape
 
         # incorperate current seq and timesteps
         node_mask = res_mask
         edge_mask = node_mask[:, None] * node_mask[:, :, None]
-        
+
         node_embed = self.res_feat_mixer(torch.cat(
             [node_embed, self.current_seq_embedder(seqs_t), self.embed_t(t, node_mask),
-             self.angles_embedder(angles_t).reshape(num_batch, num_res, -1)], dim=-1))
+             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
         node_embed = node_embed * node_mask[..., None]
         curr_rigids = du.create_rigid(rotmats_t, trans_t)
         for b in range(self._ipa_conf.num_blocks):
@@ -415,10 +506,46 @@ class GAEncoder_NS3_noChi(nn.Module):
         pred_trans1 = curr_rigids.get_trans()
         pred_rotmats1 = curr_rigids.get_rots().get_rot_mats()
         pred_seqs1_prob = self.seq_net(node_embed)
-        pred_angles1 = self.angle_net(node_embed)
-        pred_angles1 = pred_angles1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
+        pred_angles_O_1 = self.angle_O_net(node_embed)
+        pred_angles_O_1 = pred_angles_O_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
+        if Train:
+            pred_seqs_1 = seqs_1
+        else:
+            pred_seqs_1 = sample_from(F.softmax(pred_seqs1_prob, dim=-1))
 
-        return pred_rotmats1, pred_trans1, pred_angles1, pred_seqs1_prob
+
+        # Predict the chi angles via teacher forcing
+        node_embed_chi = self.res_feat_mixer(torch.cat(
+            [node_embed, self.current_seq_embedder(pred_seqs_1), self.embed_t(t, node_mask),
+             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
+        node_embed_chi = node_embed_chi * node_mask[..., None]
+        for b in range(self.chi_trunk):
+            ipa_embed = self.trunk[f'ipa_{b}'](
+                node_embed_chi,
+                edge_embed,
+                curr_rigids,
+                node_mask)
+            ipa_embed *= node_mask[..., None]
+            node_embed_chi = self.trunk[f'ipa_ln_{b}'](node_embed_chi + ipa_embed)
+            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
+                node_embed_chi, src_key_padding_mask=(1 - node_mask).bool())
+            node_embed_chi = node_embed_chi + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
+            node_embed_chi = self.trunk[f'node_transition_{b}'](node_embed_chi)
+            node_embed_chi = node_embed_chi * node_mask[..., None]
+
+            if b < (self.chi_trunk - 1):
+                edge_embed = self.trunk[f'edge_transition_{b}'](
+                    node_embed_chi, edge_embed)
+                edge_embed *= edge_mask[..., None]
+
+        pred_angles_chi_1 = self.angle_chi_net(node_embed_chi)
+        pred_angles_chi_1 = pred_angles_chi_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
+        pred_sctrans_ep = self.sc_net(node_embed_chi)
+        pred_sctrans_ep = ipa_pytorch.sctrans_organize(pred_sctrans_ep)
+
+        pred_angles_1 = torch.cat([pred_angles_O_1, pred_angles_chi_1], dim=-1)  # Concatenate O and chi angles
+
+        return pred_rotmats1, pred_trans1, pred_angles_1, pred_seqs1_prob, pred_seqs_1, pred_sctrans_ep
 
 
 class GAEncoder_NS3_distEdge(nn.Module):
@@ -548,6 +675,1074 @@ class GAEncoder_NS3_distEdge(nn.Module):
         return pred_rotmats1, pred_trans1, pred_angles1, pred_seqs1_prob
 
 
+class GAEncoder_NS18_predSC9(nn.Module):
+    def __init__(self, ipa_conf):
+        super().__init__()
+        self._ipa_conf = ipa_conf
+
+        # angles
+        self.angles_embedder = AngularEncoding(num_funcs=12)
+        num_torsion_angle = len(constants.chi_angles_mask[constants.AA.ALA]) + 1
+        self.angle_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, num_torsion_angle)
+        )
+
+        # for condition on current seq
+        self.current_seq_embedder = nn.Embedding(constants.PAD_RESIDUE_INDEX + 1,
+                                                 self._ipa_conf.c_s)
+        self.seq_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, constants.PAD_RESIDUE_INDEX - 1)
+        )
+
+        # mixer
+        self.res_feat_mixer = nn.Sequential(
+            nn.Linear(3 * self._ipa_conf.c_s + self.angles_embedder.get_out_dim(in_dim=num_torsion_angle),
+                      self._ipa_conf.c_s),
+            nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s),
+        )
+
+        self.feat_dim = self._ipa_conf.c_s
+
+        # Attention trunk
+        self.trunk = nn.ModuleDict()
+        for b in range(self._ipa_conf.num_blocks):
+            self.trunk[f'ipa_{b}'] = ipa_pytorch.InvariantPointAttention(self._ipa_conf)
+            self.trunk[f'ipa_ln_{b}'] = nn.LayerNorm(self._ipa_conf.c_s)
+            tfmr_in = self._ipa_conf.c_s
+            tfmr_layer = torch.nn.TransformerEncoderLayer(
+                d_model=tfmr_in,
+                nhead=self._ipa_conf.seq_tfmr_num_heads,
+                dim_feedforward=tfmr_in,
+                batch_first=True,
+                dropout=0.0,
+                norm_first=False
+            )
+            self.trunk[f'seq_tfmr_{b}'] = torch.nn.TransformerEncoder(
+                tfmr_layer, self._ipa_conf.seq_tfmr_num_layers, enable_nested_tensor=False)
+            self.trunk[f'post_tfmr_{b}'] = ipa_pytorch.Linear(
+                tfmr_in, self._ipa_conf.c_s, init="final")
+            self.trunk[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
+                c=self._ipa_conf.c_s)
+            self.trunk[f'bb_update_{b}'] = ipa_pytorch.BackboneUpdate(
+                self._ipa_conf.c_s, use_rot_updates=True)
+
+            if b < self._ipa_conf.num_blocks - 1:
+                # No edge update on the last block.
+                edge_in = self._ipa_conf.c_z
+                self.trunk[f'edge_transition_{b}'] = ipa_pytorch.EdgeTransition(
+                    node_embed_size=self._ipa_conf.c_s,
+                    edge_embed_in=edge_in,
+                    edge_embed_out=self._ipa_conf.c_z,
+                )
+
+        self.sc_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, (constants.max_num_heavyatoms - 6) * 3)  # 3D coordinates of 11 side chain atoms
+        )
+
+    def embed_t(self, timesteps, mask):
+        timestep_emb = get_time_embedding(
+            timesteps[:, 0],
+            self.feat_dim,
+            max_positions=2056
+        )[:, None, :].repeat(1, mask.shape[1], 1)
+        return timestep_emb
+
+    def forward(self, t, rotmats_t, trans_t, angles_t, seqs_t, node_embed, edge_embed, generate_mask, res_mask):
+        num_batch, num_res = seqs_t.shape
+
+        # incorperate current seq and timesteps
+        node_mask = res_mask
+        edge_mask = node_mask[:, None] * node_mask[:, :, None]
+
+        node_embed = self.res_feat_mixer(torch.cat(
+            [node_embed, self.current_seq_embedder(seqs_t), self.embed_t(t, node_mask),
+             self.angles_embedder(angles_t).reshape(num_batch, num_res, -1)], dim=-1))
+        node_embed = node_embed * node_mask[..., None]
+        curr_rigids = du.create_rigid(rotmats_t, trans_t)
+        for b in range(self._ipa_conf.num_blocks):
+            ipa_embed = self.trunk[f'ipa_{b}'](
+                node_embed,
+                edge_embed,
+                curr_rigids,
+                node_mask)
+            ipa_embed *= node_mask[..., None]
+            node_embed = self.trunk[f'ipa_ln_{b}'](node_embed + ipa_embed)
+            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
+                node_embed, src_key_padding_mask=(1 - node_mask).bool())
+            node_embed = node_embed + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
+            node_embed = self.trunk[f'node_transition_{b}'](node_embed)
+            node_embed = node_embed * node_mask[..., None]
+            rigid_update = self.trunk[f'bb_update_{b}'](
+                node_embed * node_mask[..., None])
+            curr_rigids = curr_rigids.compose_q_update_vec(
+                rigid_update, node_mask[..., None])
+
+            if b < self._ipa_conf.num_blocks - 1:
+                edge_embed = self.trunk[f'edge_transition_{b}'](
+                    node_embed, edge_embed)
+                edge_embed *= edge_mask[..., None]
+
+        # curr_rigids = self.rigids_nm_to_ang(curr_rigids)
+        pred_trans1 = curr_rigids.get_trans()
+        pred_rotmats1 = curr_rigids.get_rots().get_rot_mats()
+        pred_seqs1_prob = self.seq_net(node_embed)
+        pred_angles1 = self.angle_net(node_embed)
+        pred_angles1 = pred_angles1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
+
+        pred_sctrans_ep = self.sc_net(node_embed)
+        pred_sctrans_1 = ipa_pytorch.sctrans_organize(pred_sctrans_ep)
+
+        return pred_rotmats1, pred_trans1, pred_angles1, pred_seqs1_prob, pred_sctrans_1
+
+
+class GAEncoder_NS18_PredChi(nn.Module):
+    def __init__(self, ipa_conf):
+        super().__init__()
+        self._ipa_conf = ipa_conf
+
+        # angles
+        self.angles_embedder = AngularEncoding(num_funcs=12)
+        num_angle_O = 1  # Only for the O atom
+        self.angle_O_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, num_angle_O)
+        )
+
+        num_angle_chi = len(constants.chi_angles_mask[constants.AA.ALA])  # Exclude the O atom
+        self.angle_chi_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, num_angle_chi)
+        )        
+
+        # for condition on current seq
+        self.current_seq_embedder = nn.Embedding(constants.PAD_RESIDUE_INDEX + 1,
+                                                 self._ipa_conf.c_s)
+        self.seq_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, constants.PAD_RESIDUE_INDEX - 1)
+        )
+
+        # mixer
+        self.res_feat_mixer = nn.Sequential(
+            nn.Linear(3 * self._ipa_conf.c_s + self.angles_embedder.get_out_dim(in_dim=num_angle_O),
+                      self._ipa_conf.c_s),
+            nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s),
+        )
+
+        self.feat_dim = self._ipa_conf.c_s
+
+        # Attention trunk
+        self.trunk = nn.ModuleDict()
+        for b in range(self._ipa_conf.num_blocks):
+            self.trunk[f'ipa_{b}'] = ipa_pytorch.InvariantPointAttention(self._ipa_conf)
+            self.trunk[f'ipa_ln_{b}'] = nn.LayerNorm(self._ipa_conf.c_s)
+            tfmr_in = self._ipa_conf.c_s
+            tfmr_layer = torch.nn.TransformerEncoderLayer(
+                d_model=tfmr_in,
+                nhead=self._ipa_conf.seq_tfmr_num_heads,
+                dim_feedforward=tfmr_in,
+                batch_first=True,
+                dropout=0.0,
+                norm_first=False
+            )
+            self.trunk[f'seq_tfmr_{b}'] = torch.nn.TransformerEncoder(
+                tfmr_layer, self._ipa_conf.seq_tfmr_num_layers, enable_nested_tensor=False)
+            self.trunk[f'post_tfmr_{b}'] = ipa_pytorch.Linear(
+                tfmr_in, self._ipa_conf.c_s, init="final")
+            self.trunk[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
+                c=self._ipa_conf.c_s)
+            self.trunk[f'bb_update_{b}'] = ipa_pytorch.BackboneUpdate(
+                self._ipa_conf.c_s, use_rot_updates=True)
+
+            if b < self._ipa_conf.num_blocks - 1:
+                # No edge update on the last block.
+                edge_in = self._ipa_conf.c_z
+                self.trunk[f'edge_transition_{b}'] = ipa_pytorch.EdgeTransition(
+                    node_embed_size=self._ipa_conf.c_s,
+                    edge_embed_in=edge_in,
+                    edge_embed_out=self._ipa_conf.c_z,
+                )
+
+        # Attention trunk for Chi prediction
+        self.num_blocks_chi = self._ipa_conf.num_blocks - 4
+        self.trunk_chi = nn.ModuleDict()
+        for b in range(self.num_blocks_chi):
+            self.trunk_chi[f'ipa_{b}'] = ipa_pytorch.InvariantPointAttention(self._ipa_conf)
+            self.trunk_chi[f'ipa_ln_{b}'] = nn.LayerNorm(self._ipa_conf.c_s)
+            tfmr_in = self._ipa_conf.c_s
+            tfmr_layer = torch.nn.TransformerEncoderLayer(
+                d_model=tfmr_in,
+                nhead=self._ipa_conf.seq_tfmr_num_heads,
+                dim_feedforward=tfmr_in,
+                batch_first=True,
+                dropout=0.0,
+                norm_first=False
+            )
+            self.trunk_chi[f'seq_tfmr_{b}'] = torch.nn.TransformerEncoder(
+                tfmr_layer, self._ipa_conf.seq_tfmr_num_layers, enable_nested_tensor=False)
+            self.trunk_chi[f'post_tfmr_{b}'] = ipa_pytorch.Linear(
+                tfmr_in, self._ipa_conf.c_s, init="final")
+            self.trunk_chi[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
+                c=self._ipa_conf.c_s)
+
+            if b < (self.num_blocks_chi - 1):
+                # No edge update on the last block.
+                edge_in = self._ipa_conf.c_z
+                self.trunk_chi[f'edge_transition_{b}'] = ipa_pytorch.EdgeTransition(
+                    node_embed_size=self._ipa_conf.c_s,
+                    edge_embed_in=edge_in,
+                    edge_embed_out=self._ipa_conf.c_z,
+                )
+
+    def embed_t(self, timesteps, mask):
+        timestep_emb = get_time_embedding(
+            timesteps[:, 0],
+            self.feat_dim,
+            max_positions=2056
+        )[:, None, :].repeat(1, mask.shape[1], 1)
+        return timestep_emb
+
+    def forward(self, t, rotmats_t, trans_t, angles_t, 
+                seqs_t, seqs_1, node_embed, edge_embed, 
+                generate_mask, res_mask, Train=True):
+        # Make sure that angles_t only contains the O atom angle
+        angles_O_t = angles_t[:, :, 0:1]  # Only keep the first angle (O atom angle)
+        num_batch, num_res = seqs_t.shape
+
+        # incorperate current seq and timesteps
+        node_mask = res_mask
+        edge_mask = node_mask[:, None] * node_mask[:, :, None]
+
+        node_embed = self.res_feat_mixer(torch.cat(
+            [node_embed, self.current_seq_embedder(seqs_t), self.embed_t(t, node_mask),
+             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
+        node_embed = node_embed * node_mask[..., None]
+        curr_rigids = du.create_rigid(rotmats_t, trans_t)
+        for b in range(self._ipa_conf.num_blocks):
+            ipa_embed = self.trunk[f'ipa_{b}'](
+                node_embed,
+                edge_embed,
+                curr_rigids,
+                node_mask)
+            ipa_embed *= node_mask[..., None]
+            node_embed = self.trunk[f'ipa_ln_{b}'](node_embed + ipa_embed)
+            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
+                node_embed, src_key_padding_mask=(1 - node_mask).bool())
+            node_embed = node_embed + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
+            node_embed = self.trunk[f'node_transition_{b}'](node_embed)
+            node_embed = node_embed * node_mask[..., None]
+            rigid_update = self.trunk[f'bb_update_{b}'](
+                node_embed * node_mask[..., None])
+            curr_rigids = curr_rigids.compose_q_update_vec(
+                rigid_update, node_mask[..., None])
+
+            if b < self._ipa_conf.num_blocks - 1:
+                edge_embed = self.trunk[f'edge_transition_{b}'](
+                    node_embed, edge_embed)
+                edge_embed *= edge_mask[..., None]
+
+        # curr_rigids = self.rigids_nm_to_ang(curr_rigids)
+        pred_trans1 = curr_rigids.get_trans()
+        pred_rotmats1 = curr_rigids.get_rots().get_rot_mats()
+        pred_seqs1_prob = self.seq_net(node_embed)
+        pred_angles_O_1 = self.angle_O_net(node_embed)
+        pred_angles_O_1 = pred_angles_O_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
+        if Train:
+            pred_seqs_1 = seqs_1
+        else:
+            pred_seqs_1 = sample_from(F.softmax(pred_seqs1_prob, dim=-1))
+
+
+        # Predict the chi angles via teacher forcing
+        node_embed_chi = self.res_feat_mixer(torch.cat(
+            [node_embed, self.current_seq_embedder(pred_seqs_1), self.embed_t(t, node_mask),
+             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
+        node_embed_chi = node_embed_chi * node_mask[..., None]
+        for b in range(self.num_blocks_chi):
+            ipa_embed = self.trunk_chi[f'ipa_{b}'](
+                node_embed_chi,
+                edge_embed,
+                curr_rigids,
+                node_mask)
+            ipa_embed *= node_mask[..., None]
+            node_embed_chi = self.trunk_chi[f'ipa_ln_{b}'](node_embed_chi + ipa_embed)
+            seq_tfmr_out = self.trunk_chi[f'seq_tfmr_{b}'](
+                node_embed_chi, src_key_padding_mask=(1 - node_mask).bool())
+            node_embed_chi = node_embed_chi + self.trunk_chi[f'post_tfmr_{b}'](seq_tfmr_out)
+            node_embed_chi = self.trunk_chi[f'node_transition_{b}'](node_embed_chi)
+            node_embed_chi = node_embed_chi * node_mask[..., None]
+
+            if b < (self.num_blocks_chi - 1):
+                edge_embed = self.trunk_chi[f'edge_transition_{b}'](
+                    node_embed_chi, edge_embed)
+                edge_embed *= edge_mask[..., None]
+
+        pred_angles_chi_1 = self.angle_chi_net(node_embed_chi)
+        pred_angles_chi_1 = pred_angles_chi_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
+
+        pred_angles_1 = torch.cat([pred_angles_O_1, pred_angles_chi_1], dim=-1)  # Concatenate O and chi angles
+
+        return pred_rotmats1, pred_trans1, pred_angles_1, pred_seqs1_prob, pred_seqs_1
+
+
+class GAEncoder_NS18_PredChi_same_param(nn.Module):
+    # Keep the model parameters similar to that of PepFlow
+    def __init__(self, ipa_conf):
+        super().__init__()
+        self._ipa_conf = ipa_conf
+
+        # angles
+        self.angles_embedder = AngularEncoding(num_funcs=12)
+        num_angle_O = 1  # Only for the O atom
+        self.angle_O_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, num_angle_O)
+        )
+
+        num_angle_chi = len(constants.chi_angles_mask[constants.AA.ALA])  # Exclude the O atom
+        self.angle_chi_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, num_angle_chi)
+        )        
+
+        # for condition on current seq
+        self.current_seq_embedder = nn.Embedding(constants.PAD_RESIDUE_INDEX + 1,
+                                                 self._ipa_conf.c_s)
+        self.seq_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, constants.PAD_RESIDUE_INDEX - 1)
+        )
+
+        # mixer
+        self.res_feat_mixer = nn.Sequential(
+            nn.Linear(3 * self._ipa_conf.c_s + self.angles_embedder.get_out_dim(in_dim=num_angle_O),
+                      self._ipa_conf.c_s),
+            nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s),
+        )
+
+        self.feat_dim = self._ipa_conf.c_s
+
+        # Attention trunk
+        self.trunk = nn.ModuleDict()
+        for b in range(self._ipa_conf.num_blocks):
+            self.trunk[f'ipa_{b}'] = ipa_pytorch.InvariantPointAttention(self._ipa_conf)
+            self.trunk[f'ipa_ln_{b}'] = nn.LayerNorm(self._ipa_conf.c_s)
+            tfmr_in = self._ipa_conf.c_s
+            tfmr_layer = torch.nn.TransformerEncoderLayer(
+                d_model=tfmr_in,
+                nhead=self._ipa_conf.seq_tfmr_num_heads,
+                dim_feedforward=tfmr_in,
+                batch_first=True,
+                dropout=0.0,
+                norm_first=False
+            )
+            self.trunk[f'seq_tfmr_{b}'] = torch.nn.TransformerEncoder(
+                tfmr_layer, self._ipa_conf.seq_tfmr_num_layers, enable_nested_tensor=False)
+            self.trunk[f'post_tfmr_{b}'] = ipa_pytorch.Linear(
+                tfmr_in, self._ipa_conf.c_s, init="final")
+            self.trunk[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
+                c=self._ipa_conf.c_s)
+            self.trunk[f'bb_update_{b}'] = ipa_pytorch.BackboneUpdate(
+                self._ipa_conf.c_s, use_rot_updates=True)
+
+            if b < self._ipa_conf.num_blocks - 1:
+                # No edge update on the last block.
+                edge_in = self._ipa_conf.c_z
+                self.trunk[f'edge_transition_{b}'] = ipa_pytorch.EdgeTransition(
+                    node_embed_size=self._ipa_conf.c_s,
+                    edge_embed_in=edge_in,
+                    edge_embed_out=self._ipa_conf.c_z,
+                )
+        self.chi_trunk = 2
+
+    def embed_t(self, timesteps, mask):
+        timestep_emb = get_time_embedding(
+            timesteps[:, 0],
+            self.feat_dim,
+            max_positions=2056
+        )[:, None, :].repeat(1, mask.shape[1], 1)
+        return timestep_emb
+
+    def forward(self, t, rotmats_t, trans_t, angles_t, 
+                seqs_t, seqs_1, node_embed, edge_embed, 
+                generate_mask, res_mask, Train=True):
+        # Make sure that angles_t only contains the O atom angle
+        angles_O_t = angles_t[:, :, 0:1]  # Only keep the first angle (O atom angle)
+        num_batch, num_res = seqs_t.shape
+
+        # incorperate current seq and timesteps
+        node_mask = res_mask
+        edge_mask = node_mask[:, None] * node_mask[:, :, None]
+
+        node_embed = self.res_feat_mixer(torch.cat(
+            [node_embed, self.current_seq_embedder(seqs_t), self.embed_t(t, node_mask),
+             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
+        node_embed = node_embed * node_mask[..., None]
+        curr_rigids = du.create_rigid(rotmats_t, trans_t)
+        for b in range(self._ipa_conf.num_blocks):
+            ipa_embed = self.trunk[f'ipa_{b}'](
+                node_embed,
+                edge_embed,
+                curr_rigids,
+                node_mask)
+            ipa_embed *= node_mask[..., None]
+            node_embed = self.trunk[f'ipa_ln_{b}'](node_embed + ipa_embed)
+            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
+                node_embed, src_key_padding_mask=(1 - node_mask).bool())
+            node_embed = node_embed + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
+            node_embed = self.trunk[f'node_transition_{b}'](node_embed)
+            node_embed = node_embed * node_mask[..., None]
+            rigid_update = self.trunk[f'bb_update_{b}'](
+                node_embed * node_mask[..., None])
+            curr_rigids = curr_rigids.compose_q_update_vec(
+                rigid_update, node_mask[..., None])
+
+            if b < self._ipa_conf.num_blocks - 1:
+                edge_embed = self.trunk[f'edge_transition_{b}'](
+                    node_embed, edge_embed)
+                edge_embed *= edge_mask[..., None]
+
+        # curr_rigids = self.rigids_nm_to_ang(curr_rigids)
+        pred_trans1 = curr_rigids.get_trans()
+        pred_rotmats1 = curr_rigids.get_rots().get_rot_mats()
+        pred_seqs1_prob = self.seq_net(node_embed)
+        pred_angles_O_1 = self.angle_O_net(node_embed)
+        pred_angles_O_1 = pred_angles_O_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
+        if Train:
+            pred_seqs_1 = seqs_1
+        else:
+            pred_seqs_1 = sample_from(F.softmax(pred_seqs1_prob, dim=-1))
+
+
+        # Predict the chi angles via teacher forcing
+        node_embed_chi = self.res_feat_mixer(torch.cat(
+            [node_embed, self.current_seq_embedder(pred_seqs_1), self.embed_t(t, node_mask),
+             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
+        node_embed_chi = node_embed_chi * node_mask[..., None]
+        for b in range(self.chi_trunk):
+            ipa_embed = self.trunk[f'ipa_{b}'](
+                node_embed_chi,
+                edge_embed,
+                curr_rigids,
+                node_mask)
+            ipa_embed *= node_mask[..., None]
+            node_embed_chi = self.trunk[f'ipa_ln_{b}'](node_embed_chi + ipa_embed)
+            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
+                node_embed_chi, src_key_padding_mask=(1 - node_mask).bool())
+            node_embed_chi = node_embed_chi + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
+            node_embed_chi = self.trunk[f'node_transition_{b}'](node_embed_chi)
+            node_embed_chi = node_embed_chi * node_mask[..., None]
+
+            if b < (self.chi_trunk - 1):
+                edge_embed = self.trunk[f'edge_transition_{b}'](
+                    node_embed_chi, edge_embed)
+                edge_embed *= edge_mask[..., None]
+
+        pred_angles_chi_1 = self.angle_chi_net(node_embed_chi)
+        pred_angles_chi_1 = pred_angles_chi_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
+
+        pred_angles_1 = torch.cat([pred_angles_O_1, pred_angles_chi_1], dim=-1)  # Concatenate O and chi angles
+
+        return pred_rotmats1, pred_trans1, pred_angles_1, pred_seqs1_prob, pred_seqs_1
+
+
+class GAEncoder_NS18_PredChi_lighter(nn.Module):
+    def __init__(self, ipa_conf):
+        super().__init__()
+        self._ipa_conf = ipa_conf
+
+        # angles
+        num_angle_chi = len(constants.chi_angles_mask[constants.AA.ALA]) + 1  # Including O atom
+        self.angle_chi_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, num_angle_chi)
+        )
+
+        # for condition on current seq
+        self.current_seq_embedder = nn.Embedding(constants.PAD_RESIDUE_INDEX + 1,
+                                                 self._ipa_conf.c_s)
+        self.seq_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, constants.PAD_RESIDUE_INDEX - 1)
+        )
+
+        # mixer
+        self.res_feat_mixer = nn.Sequential(
+            nn.Linear(3 * self._ipa_conf.c_s,
+                      self._ipa_conf.c_s),
+            nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s),
+        )
+
+        self.feat_dim = self._ipa_conf.c_s
+
+        # Attention trunk
+        self.trunk = nn.ModuleDict()
+        for b in range(self._ipa_conf.num_blocks):
+            self.trunk[f'ipa_{b}'] = ipa_pytorch.InvariantPointAttention(self._ipa_conf)
+            self.trunk[f'ipa_ln_{b}'] = nn.LayerNorm(self._ipa_conf.c_s)
+            tfmr_in = self._ipa_conf.c_s
+            tfmr_layer = torch.nn.TransformerEncoderLayer(
+                d_model=tfmr_in,
+                nhead=self._ipa_conf.seq_tfmr_num_heads,
+                dim_feedforward=tfmr_in,
+                batch_first=True,
+                dropout=0.0,
+                norm_first=False
+            )
+            self.trunk[f'seq_tfmr_{b}'] = torch.nn.TransformerEncoder(
+                tfmr_layer, self._ipa_conf.seq_tfmr_num_layers, enable_nested_tensor=False)
+            self.trunk[f'post_tfmr_{b}'] = ipa_pytorch.Linear(
+                tfmr_in, self._ipa_conf.c_s, init="final")
+            self.trunk[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
+                c=self._ipa_conf.c_s)
+            self.trunk[f'bb_update_{b}'] = ipa_pytorch.BackboneUpdate(
+                self._ipa_conf.c_s, use_rot_updates=True)
+
+            if b < self._ipa_conf.num_blocks - 1:
+                # No edge update on the last block.
+                edge_in = self._ipa_conf.c_z
+                self.trunk[f'edge_transition_{b}'] = ipa_pytorch.EdgeTransition(
+                    node_embed_size=self._ipa_conf.c_s,
+                    edge_embed_in=edge_in,
+                    edge_embed_out=self._ipa_conf.c_z,
+                )
+
+        # Attention trunk for Chi prediction
+        self.num_blocks_chi = self._ipa_conf.num_blocks - 4
+        self.trunk_chi = nn.ModuleDict()
+        for b in range(self.num_blocks_chi):
+            self.trunk_chi[f'ipa_{b}'] = ipa_pytorch.InvariantPointAttention(self._ipa_conf)
+            self.trunk_chi[f'ipa_ln_{b}'] = nn.LayerNorm(self._ipa_conf.c_s)
+            tfmr_in = self._ipa_conf.c_s
+            tfmr_layer = torch.nn.TransformerEncoderLayer(
+                d_model=tfmr_in,
+                nhead=self._ipa_conf.seq_tfmr_num_heads,
+                dim_feedforward=tfmr_in,
+                batch_first=True,
+                dropout=0.0,
+                norm_first=False
+            )
+            self.trunk_chi[f'seq_tfmr_{b}'] = torch.nn.TransformerEncoder(
+                tfmr_layer, self._ipa_conf.seq_tfmr_num_layers, enable_nested_tensor=False)
+            self.trunk_chi[f'post_tfmr_{b}'] = ipa_pytorch.Linear(
+                tfmr_in, self._ipa_conf.c_s, init="final")
+            self.trunk_chi[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
+                c=self._ipa_conf.c_s)
+
+            if b < (self.num_blocks_chi - 1):
+                # No edge update on the last block.
+                edge_in = self._ipa_conf.c_z
+                self.trunk_chi[f'edge_transition_{b}'] = ipa_pytorch.EdgeTransition(
+                    node_embed_size=self._ipa_conf.c_s,
+                    edge_embed_in=edge_in,
+                    edge_embed_out=self._ipa_conf.c_z,
+                )
+
+    def embed_t(self, timesteps, mask):
+        timestep_emb = get_time_embedding(
+            timesteps[:, 0],
+            self.feat_dim,
+            max_positions=2056
+        )[:, None, :].repeat(1, mask.shape[1], 1)
+        return timestep_emb
+
+    def forward(self, t, rotmats_t, trans_t, angles_t, 
+                seqs_t, seqs_1, node_embed, edge_embed, 
+                generate_mask, res_mask, Train=True):
+        # Make sure that angles_t only contains the O atom angle
+        num_batch, num_res = seqs_t.shape
+
+        # incorperate current seq and timesteps
+        node_mask = res_mask
+        edge_mask = node_mask[:, None] * node_mask[:, :, None]
+
+        node_embed = self.res_feat_mixer(torch.cat(
+            [node_embed, self.current_seq_embedder(seqs_t), self.embed_t(t, node_mask)], dim=-1))
+        node_embed = node_embed * node_mask[..., None]
+        curr_rigids = du.create_rigid(rotmats_t, trans_t)
+        for b in range(self._ipa_conf.num_blocks):
+            ipa_embed = self.trunk[f'ipa_{b}'](
+                node_embed,
+                edge_embed,
+                curr_rigids,
+                node_mask)
+            ipa_embed *= node_mask[..., None]
+            node_embed = self.trunk[f'ipa_ln_{b}'](node_embed + ipa_embed)
+            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
+                node_embed, src_key_padding_mask=(1 - node_mask).bool())
+            node_embed = node_embed + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
+            node_embed = self.trunk[f'node_transition_{b}'](node_embed)
+            node_embed = node_embed * node_mask[..., None]
+            rigid_update = self.trunk[f'bb_update_{b}'](
+                node_embed * node_mask[..., None])
+            curr_rigids = curr_rigids.compose_q_update_vec(
+                rigid_update, node_mask[..., None])
+
+            if b < self._ipa_conf.num_blocks - 1:
+                edge_embed = self.trunk[f'edge_transition_{b}'](
+                    node_embed, edge_embed)
+                edge_embed *= edge_mask[..., None]
+
+        # curr_rigids = self.rigids_nm_to_ang(curr_rigids)
+        pred_trans1 = curr_rigids.get_trans()
+        pred_rotmats1 = curr_rigids.get_rots().get_rot_mats()
+        pred_seqs1_prob = self.seq_net(node_embed)
+        if Train:
+            pred_seqs_1 = seqs_1
+        else:
+            pred_seqs_1 = sample_from(F.softmax(pred_seqs1_prob, dim=-1))
+
+
+        # Predict the chi angles via teacher forcing
+        node_embed_chi = self.res_feat_mixer(torch.cat(
+            [node_embed, self.current_seq_embedder(pred_seqs_1), self.embed_t(t, node_mask)], dim=-1))
+        node_embed_chi = node_embed_chi * node_mask[..., None]
+        for b in range(self.num_blocks_chi):
+            ipa_embed = self.trunk_chi[f'ipa_{b}'](
+                node_embed_chi,
+                edge_embed,
+                curr_rigids,
+                node_mask)
+            ipa_embed *= node_mask[..., None]
+            node_embed_chi = self.trunk_chi[f'ipa_ln_{b}'](node_embed_chi + ipa_embed)
+            seq_tfmr_out = self.trunk_chi[f'seq_tfmr_{b}'](
+                node_embed_chi, src_key_padding_mask=(1 - node_mask).bool())
+            node_embed_chi = node_embed_chi + self.trunk_chi[f'post_tfmr_{b}'](seq_tfmr_out)
+            node_embed_chi = self.trunk_chi[f'node_transition_{b}'](node_embed_chi)
+            node_embed_chi = node_embed_chi * node_mask[..., None]
+
+            if b < (self.num_blocks_chi - 1):
+                edge_embed = self.trunk_chi[f'edge_transition_{b}'](
+                    node_embed_chi, edge_embed)
+                edge_embed *= edge_mask[..., None]
+
+        pred_angles_1 = self.angle_chi_net(node_embed_chi)
+        pred_angles_1 = pred_angles_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
+
+        return pred_rotmats1, pred_trans1, pred_angles_1, pred_seqs1_prob, pred_seqs_1
+
+
+class GAEncoder_NS18_predSC9_PredChi(nn.Module):
+    def __init__(self, ipa_conf):
+        super().__init__()
+        self._ipa_conf = ipa_conf
+
+        # angles
+        self.angles_embedder = AngularEncoding(num_funcs=12)
+        num_angle_O = 1  # Only for the O atom
+        self.angle_O_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, num_angle_O)
+        )
+
+        num_angle_chi = len(constants.chi_angles_mask[constants.AA.ALA])  # Exclude the O atom
+        self.angle_chi_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, num_angle_chi)
+        )        
+
+        # for condition on current seq
+        self.current_seq_embedder = nn.Embedding(constants.PAD_RESIDUE_INDEX + 1,
+                                                 self._ipa_conf.c_s)
+        self.seq_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, constants.PAD_RESIDUE_INDEX - 1)
+        )
+
+        # mixer
+        self.res_feat_mixer = nn.Sequential(
+            nn.Linear(3 * self._ipa_conf.c_s + self.angles_embedder.get_out_dim(in_dim=num_angle_O),
+                      self._ipa_conf.c_s),
+            nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s),
+        )
+
+        self.feat_dim = self._ipa_conf.c_s
+
+        # Attention trunk
+        self.trunk = nn.ModuleDict()
+        for b in range(self._ipa_conf.num_blocks):
+            self.trunk[f'ipa_{b}'] = ipa_pytorch.InvariantPointAttention(self._ipa_conf)
+            self.trunk[f'ipa_ln_{b}'] = nn.LayerNorm(self._ipa_conf.c_s)
+            tfmr_in = self._ipa_conf.c_s
+            tfmr_layer = torch.nn.TransformerEncoderLayer(
+                d_model=tfmr_in,
+                nhead=self._ipa_conf.seq_tfmr_num_heads,
+                dim_feedforward=tfmr_in,
+                batch_first=True,
+                dropout=0.0,
+                norm_first=False
+            )
+            self.trunk[f'seq_tfmr_{b}'] = torch.nn.TransformerEncoder(
+                tfmr_layer, self._ipa_conf.seq_tfmr_num_layers, enable_nested_tensor=False)
+            self.trunk[f'post_tfmr_{b}'] = ipa_pytorch.Linear(
+                tfmr_in, self._ipa_conf.c_s, init="final")
+            self.trunk[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
+                c=self._ipa_conf.c_s)
+            self.trunk[f'bb_update_{b}'] = ipa_pytorch.BackboneUpdate(
+                self._ipa_conf.c_s, use_rot_updates=True)
+
+            if b < self._ipa_conf.num_blocks - 1:
+                # No edge update on the last block.
+                edge_in = self._ipa_conf.c_z
+                self.trunk[f'edge_transition_{b}'] = ipa_pytorch.EdgeTransition(
+                    node_embed_size=self._ipa_conf.c_s,
+                    edge_embed_in=edge_in,
+                    edge_embed_out=self._ipa_conf.c_z,
+                )
+
+        # Attention trunk for Chi prediction
+        self.num_blocks_chi = self._ipa_conf.num_blocks - 4
+        self.trunk_chi = nn.ModuleDict()
+        for b in range(self.num_blocks_chi):
+            self.trunk_chi[f'ipa_{b}'] = ipa_pytorch.InvariantPointAttention(self._ipa_conf)
+            self.trunk_chi[f'ipa_ln_{b}'] = nn.LayerNorm(self._ipa_conf.c_s)
+            tfmr_in = self._ipa_conf.c_s
+            tfmr_layer = torch.nn.TransformerEncoderLayer(
+                d_model=tfmr_in,
+                nhead=self._ipa_conf.seq_tfmr_num_heads,
+                dim_feedforward=tfmr_in,
+                batch_first=True,
+                dropout=0.0,
+                norm_first=False
+            )
+            self.trunk_chi[f'seq_tfmr_{b}'] = torch.nn.TransformerEncoder(
+                tfmr_layer, self._ipa_conf.seq_tfmr_num_layers, enable_nested_tensor=False)
+            self.trunk_chi[f'post_tfmr_{b}'] = ipa_pytorch.Linear(
+                tfmr_in, self._ipa_conf.c_s, init="final")
+            self.trunk_chi[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
+                c=self._ipa_conf.c_s)
+
+            if b < (self.num_blocks_chi - 1):
+                # No edge update on the last block.
+                edge_in = self._ipa_conf.c_z
+                self.trunk_chi[f'edge_transition_{b}'] = ipa_pytorch.EdgeTransition(
+                    node_embed_size=self._ipa_conf.c_s,
+                    edge_embed_in=edge_in,
+                    edge_embed_out=self._ipa_conf.c_z,
+                )
+
+        self.sc_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, (constants.max_num_heavyatoms - 6) * 3)  # 3D coordinates of 11 side chain atoms
+        )
+
+    def embed_t(self, timesteps, mask):
+        timestep_emb = get_time_embedding(
+            timesteps[:, 0],
+            self.feat_dim,
+            max_positions=2056
+        )[:, None, :].repeat(1, mask.shape[1], 1)
+        return timestep_emb
+
+    def forward(self, t, rotmats_t, trans_t, angles_t, 
+                seqs_t, seqs_1, node_embed, edge_embed, 
+                generate_mask, res_mask, Train=True):
+        # Make sure that angles_t only contains the O atom angle
+        angles_O_t = angles_t[:, :, 0:1]  # Only keep the first angle (O atom angle)
+        num_batch, num_res = seqs_t.shape
+
+        # incorperate current seq and timesteps
+        node_mask = res_mask
+        edge_mask = node_mask[:, None] * node_mask[:, :, None]
+
+        node_embed = self.res_feat_mixer(torch.cat(
+            [node_embed, self.current_seq_embedder(seqs_t), self.embed_t(t, node_mask),
+             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
+        node_embed = node_embed * node_mask[..., None]
+        curr_rigids = du.create_rigid(rotmats_t, trans_t)
+        for b in range(self._ipa_conf.num_blocks):
+            ipa_embed = self.trunk[f'ipa_{b}'](
+                node_embed,
+                edge_embed,
+                curr_rigids,
+                node_mask)
+            ipa_embed *= node_mask[..., None]
+            node_embed = self.trunk[f'ipa_ln_{b}'](node_embed + ipa_embed)
+            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
+                node_embed, src_key_padding_mask=(1 - node_mask).bool())
+            node_embed = node_embed + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
+            node_embed = self.trunk[f'node_transition_{b}'](node_embed)
+            node_embed = node_embed * node_mask[..., None]
+            rigid_update = self.trunk[f'bb_update_{b}'](
+                node_embed * node_mask[..., None])
+            curr_rigids = curr_rigids.compose_q_update_vec(
+                rigid_update, node_mask[..., None])
+
+            if b < self._ipa_conf.num_blocks - 1:
+                edge_embed = self.trunk[f'edge_transition_{b}'](
+                    node_embed, edge_embed)
+                edge_embed *= edge_mask[..., None]
+
+        # curr_rigids = self.rigids_nm_to_ang(curr_rigids)
+        pred_trans1 = curr_rigids.get_trans()
+        pred_rotmats1 = curr_rigids.get_rots().get_rot_mats()
+        pred_seqs1_prob = self.seq_net(node_embed)
+        pred_angles_O_1 = self.angle_O_net(node_embed)
+        pred_angles_O_1 = pred_angles_O_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
+        pred_sctrans_ep = self.sc_net(node_embed)
+        pred_sctrans_1 = ipa_pytorch.sctrans_organize(pred_sctrans_ep)
+        if Train:
+            pred_seqs_1 = seqs_1
+        else:
+            pred_seqs_1 = sample_from(F.softmax(pred_seqs1_prob, dim=-1))
+
+
+        # Predict the chi angles via teacher forcing
+        node_embed_chi = self.res_feat_mixer(torch.cat(
+            [node_embed, self.current_seq_embedder(pred_seqs_1), self.embed_t(t, node_mask),
+             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
+        node_embed_chi = node_embed_chi * node_mask[..., None]
+        for b in range(self.num_blocks_chi):
+            ipa_embed = self.trunk_chi[f'ipa_{b}'](
+                node_embed_chi,
+                edge_embed,
+                curr_rigids,
+                node_mask)
+            ipa_embed *= node_mask[..., None]
+            node_embed_chi = self.trunk_chi[f'ipa_ln_{b}'](node_embed_chi + ipa_embed)
+            seq_tfmr_out = self.trunk_chi[f'seq_tfmr_{b}'](
+                node_embed_chi, src_key_padding_mask=(1 - node_mask).bool())
+            node_embed_chi = node_embed_chi + self.trunk_chi[f'post_tfmr_{b}'](seq_tfmr_out)
+            node_embed_chi = self.trunk_chi[f'node_transition_{b}'](node_embed_chi)
+            node_embed_chi = node_embed_chi * node_mask[..., None]
+
+            if b < (self.num_blocks_chi - 1):
+                edge_embed = self.trunk_chi[f'edge_transition_{b}'](
+                    node_embed_chi, edge_embed)
+                edge_embed *= edge_mask[..., None]
+
+        pred_angles_chi_1 = self.angle_chi_net(node_embed_chi)
+        pred_angles_chi_1 = pred_angles_chi_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
+
+        pred_angles_1 = torch.cat([pred_angles_O_1, pred_angles_chi_1], dim=-1)  # Concatenate O and chi angles
+
+        return pred_rotmats1, pred_trans1, pred_angles_1, pred_seqs1_prob, pred_sctrans_1, pred_seqs_1
+
+
+class GAEncoder_NS18_predSC9_PredChi_SC(nn.Module):
+    def __init__(self, ipa_conf):
+        super().__init__()
+        self._ipa_conf = ipa_conf
+
+        # angles
+        self.angles_embedder = AngularEncoding(num_funcs=12)
+        num_angle_O = 1  # Only for the O atom
+        self.angle_O_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, num_angle_O)
+        )
+
+        num_angle_chi = len(constants.chi_angles_mask[constants.AA.ALA])  # Exclude the O atom
+        self.angle_chi_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, num_angle_chi)
+        )        
+
+        # for condition on current seq
+        self.current_seq_embedder = nn.Embedding(constants.PAD_RESIDUE_INDEX + 1,
+                                                 self._ipa_conf.c_s)
+        self.seq_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, constants.PAD_RESIDUE_INDEX - 1)
+        )
+
+        # mixer
+        self.res_feat_mixer = nn.Sequential(
+            nn.Linear(3 * self._ipa_conf.c_s + self.angles_embedder.get_out_dim(in_dim=num_angle_O),
+                      self._ipa_conf.c_s),
+            nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s),
+        )
+
+        self.feat_dim = self._ipa_conf.c_s
+
+        # Attention trunk
+        self.trunk = nn.ModuleDict()
+        for b in range(self._ipa_conf.num_blocks):
+            self.trunk[f'ipa_{b}'] = ipa_pytorch.InvariantPointAttention(self._ipa_conf)
+            self.trunk[f'ipa_ln_{b}'] = nn.LayerNorm(self._ipa_conf.c_s)
+            tfmr_in = self._ipa_conf.c_s
+            tfmr_layer = torch.nn.TransformerEncoderLayer(
+                d_model=tfmr_in,
+                nhead=self._ipa_conf.seq_tfmr_num_heads,
+                dim_feedforward=tfmr_in,
+                batch_first=True,
+                dropout=0.0,
+                norm_first=False
+            )
+            self.trunk[f'seq_tfmr_{b}'] = torch.nn.TransformerEncoder(
+                tfmr_layer, self._ipa_conf.seq_tfmr_num_layers, enable_nested_tensor=False)
+            self.trunk[f'post_tfmr_{b}'] = ipa_pytorch.Linear(
+                tfmr_in, self._ipa_conf.c_s, init="final")
+            self.trunk[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
+                c=self._ipa_conf.c_s)
+            self.trunk[f'bb_update_{b}'] = ipa_pytorch.BackboneUpdate(
+                self._ipa_conf.c_s, use_rot_updates=True)
+
+            if b < self._ipa_conf.num_blocks - 1:
+                # No edge update on the last block.
+                edge_in = self._ipa_conf.c_z
+                self.trunk[f'edge_transition_{b}'] = ipa_pytorch.EdgeTransition(
+                    node_embed_size=self._ipa_conf.c_s,
+                    edge_embed_in=edge_in,
+                    edge_embed_out=self._ipa_conf.c_z,
+                )
+
+        # Attention trunk for Chi prediction
+        self.num_blocks_chi = self._ipa_conf.num_blocks - 4
+        self.trunk_chi = nn.ModuleDict()
+        for b in range(self.num_blocks_chi):
+            self.trunk_chi[f'ipa_{b}'] = ipa_pytorch.InvariantPointAttention(self._ipa_conf)
+            self.trunk_chi[f'ipa_ln_{b}'] = nn.LayerNorm(self._ipa_conf.c_s)
+            tfmr_in = self._ipa_conf.c_s
+            tfmr_layer = torch.nn.TransformerEncoderLayer(
+                d_model=tfmr_in,
+                nhead=self._ipa_conf.seq_tfmr_num_heads,
+                dim_feedforward=tfmr_in,
+                batch_first=True,
+                dropout=0.0,
+                norm_first=False
+            )
+            self.trunk_chi[f'seq_tfmr_{b}'] = torch.nn.TransformerEncoder(
+                tfmr_layer, self._ipa_conf.seq_tfmr_num_layers, enable_nested_tensor=False)
+            self.trunk_chi[f'post_tfmr_{b}'] = ipa_pytorch.Linear(
+                tfmr_in, self._ipa_conf.c_s, init="final")
+            self.trunk_chi[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
+                c=self._ipa_conf.c_s)
+
+            if b < (self.num_blocks_chi - 1):
+                # No edge update on the last block.
+                edge_in = self._ipa_conf.c_z
+                self.trunk_chi[f'edge_transition_{b}'] = ipa_pytorch.EdgeTransition(
+                    node_embed_size=self._ipa_conf.c_s,
+                    edge_embed_in=edge_in,
+                    edge_embed_out=self._ipa_conf.c_z,
+                )
+
+        self.sc_net = nn.Sequential(
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
+            nn.Linear(self._ipa_conf.c_s, (constants.max_num_heavyatoms - 6) * 3)  # 3D coordinates of 11 side chain atoms
+        )
+
+    def embed_t(self, timesteps, mask):
+        timestep_emb = get_time_embedding(
+            timesteps[:, 0],
+            self.feat_dim,
+            max_positions=2056
+        )[:, None, :].repeat(1, mask.shape[1], 1)
+        return timestep_emb
+
+    def forward(self, t, rotmats_t, trans_t, angles_t, 
+                seqs_t, seqs_1, node_embed, edge_embed, 
+                generate_mask, res_mask, Train=True):
+        # Make sure that angles_t only contains the O atom angle
+        angles_O_t = angles_t[:, :, 0:1]  # Only keep the first angle (O atom angle)
+        num_batch, num_res = seqs_t.shape
+
+        # incorperate current seq and timesteps
+        node_mask = res_mask
+        edge_mask = node_mask[:, None] * node_mask[:, :, None]
+
+        node_embed = self.res_feat_mixer(torch.cat(
+            [node_embed, self.current_seq_embedder(seqs_t), self.embed_t(t, node_mask),
+             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
+        node_embed = node_embed * node_mask[..., None]
+        curr_rigids = du.create_rigid(rotmats_t, trans_t)
+        for b in range(self._ipa_conf.num_blocks):
+            ipa_embed = self.trunk[f'ipa_{b}'](
+                node_embed,
+                edge_embed,
+                curr_rigids,
+                node_mask)
+            ipa_embed *= node_mask[..., None]
+            node_embed = self.trunk[f'ipa_ln_{b}'](node_embed + ipa_embed)
+            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
+                node_embed, src_key_padding_mask=(1 - node_mask).bool())
+            node_embed = node_embed + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
+            node_embed = self.trunk[f'node_transition_{b}'](node_embed)
+            node_embed = node_embed * node_mask[..., None]
+            rigid_update = self.trunk[f'bb_update_{b}'](
+                node_embed * node_mask[..., None])
+            curr_rigids = curr_rigids.compose_q_update_vec(
+                rigid_update, node_mask[..., None])
+
+            if b < self._ipa_conf.num_blocks - 1:
+                edge_embed = self.trunk[f'edge_transition_{b}'](
+                    node_embed, edge_embed)
+                edge_embed *= edge_mask[..., None]
+
+        # curr_rigids = self.rigids_nm_to_ang(curr_rigids)
+        pred_trans1 = curr_rigids.get_trans()
+        pred_rotmats1 = curr_rigids.get_rots().get_rot_mats()
+        pred_seqs1_prob = self.seq_net(node_embed)
+        pred_angles_O_1 = self.angle_O_net(node_embed)
+        pred_angles_O_1 = pred_angles_O_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
+
+        if Train:
+            pred_seqs_1 = seqs_1
+        else:
+            pred_seqs_1 = sample_from(F.softmax(pred_seqs1_prob, dim=-1))
+
+
+        # Predict the chi angles via teacher forcing
+        node_embed_chi = self.res_feat_mixer(torch.cat(
+            [node_embed, self.current_seq_embedder(pred_seqs_1), self.embed_t(t, node_mask),
+             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
+        node_embed_chi = node_embed_chi * node_mask[..., None]
+        for b in range(self.num_blocks_chi):
+            ipa_embed = self.trunk_chi[f'ipa_{b}'](
+                node_embed_chi,
+                edge_embed,
+                curr_rigids,
+                node_mask)
+            ipa_embed *= node_mask[..., None]
+            node_embed_chi = self.trunk_chi[f'ipa_ln_{b}'](node_embed_chi + ipa_embed)
+            seq_tfmr_out = self.trunk_chi[f'seq_tfmr_{b}'](
+                node_embed_chi, src_key_padding_mask=(1 - node_mask).bool())
+            node_embed_chi = node_embed_chi + self.trunk_chi[f'post_tfmr_{b}'](seq_tfmr_out)
+            node_embed_chi = self.trunk_chi[f'node_transition_{b}'](node_embed_chi)
+            node_embed_chi = node_embed_chi * node_mask[..., None]
+
+            if b < (self.num_blocks_chi - 1):
+                edge_embed = self.trunk_chi[f'edge_transition_{b}'](
+                    node_embed_chi, edge_embed)
+                edge_embed *= edge_mask[..., None]
+
+        pred_angles_chi_1 = self.angle_chi_net(node_embed_chi)
+        pred_angles_chi_1 = pred_angles_chi_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
+        pred_angles_1 = torch.cat([pred_angles_O_1, pred_angles_chi_1], dim=-1)  # Concatenate O and chi angles
+        pred_sctrans_ep = self.sc_net(node_embed_chi)
+        pred_sctrans_1 = ipa_pytorch.sctrans_organize(pred_sctrans_ep)
+
+        return pred_rotmats1, pred_trans1, pred_angles_1, pred_seqs1_prob, pred_sctrans_1, pred_seqs_1
+
+
 class GAEncoder_NS3_predSC9(nn.Module):
     def __init__(self, ipa_conf):
         super().__init__()
@@ -630,7 +1825,7 @@ class GAEncoder_NS3_predSC9(nn.Module):
 
     def forward(self, t, rotmats_t, trans_t, angles_t, seqs_t, node_embed, edge_embed, generate_mask, res_mask):
         num_batch, num_res = seqs_t.shape
-        
+
         # incorperate current seq and timesteps
         node_mask = res_mask
         edge_mask = node_mask[:, None] * node_mask[:, :, None]
@@ -640,8 +1835,6 @@ class GAEncoder_NS3_predSC9(nn.Module):
              self.angles_embedder(angles_t).reshape(num_batch, num_res, -1)], dim=-1))
         node_embed = node_embed * node_mask[..., None]
         curr_rigids = du.create_rigid(rotmats_t, trans_t)
-        # if t[0,0] > 0.5:
-        #     pdb.set_trace()
         for b in range(self._ipa_conf.num_blocks):
             ipa_embed = self.trunk[f'ipa_{b}'](
                 node_embed,
@@ -926,875 +2119,6 @@ class GAEncoder_NS3_predSC9_distEdge(nn.Module):
         pred_sctrans_1 = ipa_pytorch.sctrans_organize(pred_sctrans_ep)
 
         return pred_rotmats1, pred_trans1, pred_angles1, pred_seqs1_prob, pred_sctrans_1
-
-
-class GAEncoder_NS3_PredChi(nn.Module):
-    def __init__(self, ipa_conf):
-        super().__init__()
-        self._ipa_conf = ipa_conf
-
-        # angles
-        self.angles_embedder = AngularEncoding(num_funcs=12)
-        num_angle_O = 1  # Only for the O atom
-        self.angle_O_net = nn.Sequential(
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, num_angle_O)
-        )
-
-        num_angle_chi = len(constants.chi_angles_mask[constants.AA.ALA])  # Exclude the O atom
-        self.angle_chi_net = nn.Sequential(
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, num_angle_chi)
-        )        
-
-        # for condition on current seq
-        self.current_seq_embedder = nn.Embedding(constants.PAD_RESIDUE_INDEX + 1,
-                                                 self._ipa_conf.c_s)
-        self.seq_net = nn.Sequential(
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, constants.PAD_RESIDUE_INDEX - 1)
-        )
-
-        # mixer
-        self.res_feat_mixer = nn.Sequential(
-            nn.Linear(3 * self._ipa_conf.c_s + self.angles_embedder.get_out_dim(in_dim=num_angle_O),
-                      self._ipa_conf.c_s),
-            nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s),
-        )
-
-        self.feat_dim = self._ipa_conf.c_s
-
-        # Attention trunk
-        self.trunk = nn.ModuleDict()
-        for b in range(self._ipa_conf.num_blocks):
-            self.trunk[f'ipa_{b}'] = ipa_pytorch.InvariantPointAttention(self._ipa_conf)
-            self.trunk[f'ipa_ln_{b}'] = nn.LayerNorm(self._ipa_conf.c_s)
-            tfmr_in = self._ipa_conf.c_s
-            tfmr_layer = torch.nn.TransformerEncoderLayer(
-                d_model=tfmr_in,
-                nhead=self._ipa_conf.seq_tfmr_num_heads,
-                dim_feedforward=tfmr_in,
-                batch_first=True,
-                dropout=0.0,
-                norm_first=False
-            )
-            self.trunk[f'seq_tfmr_{b}'] = torch.nn.TransformerEncoder(
-                tfmr_layer, self._ipa_conf.seq_tfmr_num_layers, enable_nested_tensor=False)
-            self.trunk[f'post_tfmr_{b}'] = ipa_pytorch.Linear(
-                tfmr_in, self._ipa_conf.c_s, init="final")
-            self.trunk[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
-                c=self._ipa_conf.c_s)
-            self.trunk[f'bb_update_{b}'] = ipa_pytorch.BackboneUpdate(
-                self._ipa_conf.c_s, use_rot_updates=True)
-
-            if b < self._ipa_conf.num_blocks - 1:
-                # No edge update on the last block.
-                edge_in = self._ipa_conf.c_z
-                self.trunk[f'edge_transition_{b}'] = ipa_pytorch.EdgeTransition(
-                    node_embed_size=self._ipa_conf.c_s,
-                    edge_embed_in=edge_in,
-                    edge_embed_out=self._ipa_conf.c_z,
-                )
-
-        # Attention trunk for Chi prediction
-        self.num_blocks_chi = self._ipa_conf.num_blocks - 4
-        self.trunk_chi = nn.ModuleDict()
-        for b in range(self.num_blocks_chi):
-            self.trunk_chi[f'ipa_{b}'] = ipa_pytorch.InvariantPointAttention(self._ipa_conf)
-            self.trunk_chi[f'ipa_ln_{b}'] = nn.LayerNorm(self._ipa_conf.c_s)
-            tfmr_in = self._ipa_conf.c_s
-            tfmr_layer = torch.nn.TransformerEncoderLayer(
-                d_model=tfmr_in,
-                nhead=self._ipa_conf.seq_tfmr_num_heads,
-                dim_feedforward=tfmr_in,
-                batch_first=True,
-                dropout=0.0,
-                norm_first=False
-            )
-            self.trunk_chi[f'seq_tfmr_{b}'] = torch.nn.TransformerEncoder(
-                tfmr_layer, self._ipa_conf.seq_tfmr_num_layers, enable_nested_tensor=False)
-            self.trunk_chi[f'post_tfmr_{b}'] = ipa_pytorch.Linear(
-                tfmr_in, self._ipa_conf.c_s, init="final")
-            self.trunk_chi[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
-                c=self._ipa_conf.c_s)
-
-            if b < (self.num_blocks_chi - 1):
-                # No edge update on the last block.
-                edge_in = self._ipa_conf.c_z
-                self.trunk_chi[f'edge_transition_{b}'] = ipa_pytorch.EdgeTransition(
-                    node_embed_size=self._ipa_conf.c_s,
-                    edge_embed_in=edge_in,
-                    edge_embed_out=self._ipa_conf.c_z,
-                )
-
-    def embed_t(self, timesteps, mask):
-        timestep_emb = get_time_embedding(
-            timesteps[:, 0],
-            self.feat_dim,
-            max_positions=2056
-        )[:, None, :].repeat(1, mask.shape[1], 1)
-        return timestep_emb
-
-    def forward(self, t, rotmats_t, trans_t, angles_t, 
-                seqs_t, seqs_1, node_embed, edge_embed, 
-                generate_mask, res_mask, Train=True):
-        # Make sure that angles_t only contains the O atom angle
-        angles_O_t = angles_t[:, :, 0:1]  # Only keep the first angle (O atom angle)
-        num_batch, num_res = seqs_t.shape
-
-        # incorperate current seq and timesteps
-        node_mask = res_mask
-        edge_mask = node_mask[:, None] * node_mask[:, :, None]
-
-        node_embed = self.res_feat_mixer(torch.cat(
-            [node_embed, self.current_seq_embedder(seqs_t), self.embed_t(t, node_mask),
-             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
-        node_embed = node_embed * node_mask[..., None]
-        curr_rigids = du.create_rigid(rotmats_t, trans_t)
-        for b in range(self._ipa_conf.num_blocks):
-            ipa_embed = self.trunk[f'ipa_{b}'](
-                node_embed,
-                edge_embed,
-                curr_rigids,
-                node_mask)
-            ipa_embed *= node_mask[..., None]
-            node_embed = self.trunk[f'ipa_ln_{b}'](node_embed + ipa_embed)
-            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
-                node_embed, src_key_padding_mask=(1 - node_mask).bool())
-            node_embed = node_embed + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
-            node_embed = self.trunk[f'node_transition_{b}'](node_embed)
-            node_embed = node_embed * node_mask[..., None]
-            rigid_update = self.trunk[f'bb_update_{b}'](
-                node_embed * node_mask[..., None])
-            curr_rigids = curr_rigids.compose_q_update_vec(
-                rigid_update, node_mask[..., None])
-
-            if b < self._ipa_conf.num_blocks - 1:
-                edge_embed = self.trunk[f'edge_transition_{b}'](
-                    node_embed, edge_embed)
-                edge_embed *= edge_mask[..., None]
-
-        # curr_rigids = self.rigids_nm_to_ang(curr_rigids)
-        pred_trans1 = curr_rigids.get_trans()
-        pred_rotmats1 = curr_rigids.get_rots().get_rot_mats()
-        pred_seqs1_prob = self.seq_net(node_embed)
-        pred_angles_O_1 = self.angle_O_net(node_embed)
-        pred_angles_O_1 = pred_angles_O_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
-        if Train:
-            pred_seqs_1 = seqs_1
-        else:
-            pred_seqs_1 = sample_from(F.softmax(pred_seqs1_prob, dim=-1))
-
-
-        # Predict the chi angles via teacher forcing
-        node_embed_chi = self.res_feat_mixer(torch.cat(
-            [node_embed, self.current_seq_embedder(pred_seqs_1), self.embed_t(t, node_mask),
-             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
-        node_embed_chi = node_embed_chi * node_mask[..., None]
-        for b in range(self.num_blocks_chi):
-            ipa_embed = self.trunk_chi[f'ipa_{b}'](
-                node_embed_chi,
-                edge_embed,
-                curr_rigids,
-                node_mask)
-            ipa_embed *= node_mask[..., None]
-            node_embed_chi = self.trunk_chi[f'ipa_ln_{b}'](node_embed_chi + ipa_embed)
-            seq_tfmr_out = self.trunk_chi[f'seq_tfmr_{b}'](
-                node_embed_chi, src_key_padding_mask=(1 - node_mask).bool())
-            node_embed_chi = node_embed_chi + self.trunk_chi[f'post_tfmr_{b}'](seq_tfmr_out)
-            node_embed_chi = self.trunk_chi[f'node_transition_{b}'](node_embed_chi)
-            node_embed_chi = node_embed_chi * node_mask[..., None]
-
-            if b < (self.num_blocks_chi - 1):
-                edge_embed = self.trunk_chi[f'edge_transition_{b}'](
-                    node_embed_chi, edge_embed)
-                edge_embed *= edge_mask[..., None]
-
-        pred_angles_chi_1 = self.angle_chi_net(node_embed_chi)
-        pred_angles_chi_1 = pred_angles_chi_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
-
-        pred_angles_1 = torch.cat([pred_angles_O_1, pred_angles_chi_1], dim=-1)  # Concatenate O and chi angles
-
-        return pred_rotmats1, pred_trans1, pred_angles_1, pred_seqs1_prob, pred_seqs_1
-
-
-class GAEncoder_NS3_PredChi_same_param(nn.Module):
-    # Keep the model parameters similar to that of PepFlow
-    def __init__(self, ipa_conf):
-        super().__init__()
-        self._ipa_conf = ipa_conf
-
-        # angles
-        self.angles_embedder = AngularEncoding(num_funcs=12)
-        num_angle_O = 1  # Only for the O atom
-        self.angle_O_net = nn.Sequential(
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, num_angle_O)
-        )
-
-        num_angle_chi = len(constants.chi_angles_mask[constants.AA.ALA])  # Exclude the O atom
-        self.angle_chi_net = nn.Sequential(
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, num_angle_chi)
-        )        
-
-        # for condition on current seq
-        self.current_seq_embedder = nn.Embedding(constants.PAD_RESIDUE_INDEX + 1,
-                                                 self._ipa_conf.c_s)
-        self.seq_net = nn.Sequential(
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, constants.PAD_RESIDUE_INDEX - 1)
-        )
-
-        # mixer
-        self.res_feat_mixer = nn.Sequential(
-            nn.Linear(3 * self._ipa_conf.c_s + self.angles_embedder.get_out_dim(in_dim=num_angle_O),
-                      self._ipa_conf.c_s),
-            nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s),
-        )
-
-        self.feat_dim = self._ipa_conf.c_s
-
-        # Attention trunk
-        self.trunk = nn.ModuleDict()
-        for b in range(self._ipa_conf.num_blocks):
-            self.trunk[f'ipa_{b}'] = ipa_pytorch.InvariantPointAttention(self._ipa_conf)
-            self.trunk[f'ipa_ln_{b}'] = nn.LayerNorm(self._ipa_conf.c_s)
-            tfmr_in = self._ipa_conf.c_s
-            tfmr_layer = torch.nn.TransformerEncoderLayer(
-                d_model=tfmr_in,
-                nhead=self._ipa_conf.seq_tfmr_num_heads,
-                dim_feedforward=tfmr_in,
-                batch_first=True,
-                dropout=0.0,
-                norm_first=False
-            )
-            self.trunk[f'seq_tfmr_{b}'] = torch.nn.TransformerEncoder(
-                tfmr_layer, self._ipa_conf.seq_tfmr_num_layers, enable_nested_tensor=False)
-            self.trunk[f'post_tfmr_{b}'] = ipa_pytorch.Linear(
-                tfmr_in, self._ipa_conf.c_s, init="final")
-            self.trunk[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
-                c=self._ipa_conf.c_s)
-            self.trunk[f'bb_update_{b}'] = ipa_pytorch.BackboneUpdate(
-                self._ipa_conf.c_s, use_rot_updates=True)
-
-            if b < self._ipa_conf.num_blocks - 1:
-                # No edge update on the last block.
-                edge_in = self._ipa_conf.c_z
-                self.trunk[f'edge_transition_{b}'] = ipa_pytorch.EdgeTransition(
-                    node_embed_size=self._ipa_conf.c_s,
-                    edge_embed_in=edge_in,
-                    edge_embed_out=self._ipa_conf.c_z,
-                )
-        self.chi_trunk = 2
-
-    def embed_t(self, timesteps, mask):
-        timestep_emb = get_time_embedding(
-            timesteps[:, 0],
-            self.feat_dim,
-            max_positions=2056
-        )[:, None, :].repeat(1, mask.shape[1], 1)
-        return timestep_emb
-
-    def forward(self, t, rotmats_t, trans_t, angles_t, 
-                seqs_t, seqs_1, node_embed, edge_embed, 
-                generate_mask, res_mask, Train=True):
-        # Make sure that angles_t only contains the O atom angle
-        angles_O_t = angles_t[:, :, 0:1]  # Only keep the first angle (O atom angle)
-        num_batch, num_res = seqs_t.shape
-
-        # incorperate current seq and timesteps
-        node_mask = res_mask
-        edge_mask = node_mask[:, None] * node_mask[:, :, None]
-
-        node_embed = self.res_feat_mixer(torch.cat(
-            [node_embed, self.current_seq_embedder(seqs_t), self.embed_t(t, node_mask),
-             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
-        node_embed = node_embed * node_mask[..., None]
-        curr_rigids = du.create_rigid(rotmats_t, trans_t)
-        for b in range(self._ipa_conf.num_blocks):
-            ipa_embed = self.trunk[f'ipa_{b}'](
-                node_embed,
-                edge_embed,
-                curr_rigids,
-                node_mask)
-            ipa_embed *= node_mask[..., None]
-            node_embed = self.trunk[f'ipa_ln_{b}'](node_embed + ipa_embed)
-            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
-                node_embed, src_key_padding_mask=(1 - node_mask).bool())
-            node_embed = node_embed + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
-            node_embed = self.trunk[f'node_transition_{b}'](node_embed)
-            node_embed = node_embed * node_mask[..., None]
-            rigid_update = self.trunk[f'bb_update_{b}'](
-                node_embed * node_mask[..., None])
-            curr_rigids = curr_rigids.compose_q_update_vec(
-                rigid_update, node_mask[..., None])
-
-            if b < self._ipa_conf.num_blocks - 1:
-                edge_embed = self.trunk[f'edge_transition_{b}'](
-                    node_embed, edge_embed)
-                edge_embed *= edge_mask[..., None]
-
-        # curr_rigids = self.rigids_nm_to_ang(curr_rigids)
-        pred_trans1 = curr_rigids.get_trans()
-        pred_rotmats1 = curr_rigids.get_rots().get_rot_mats()
-        pred_seqs1_prob = self.seq_net(node_embed)
-        pred_angles_O_1 = self.angle_O_net(node_embed)
-        pred_angles_O_1 = pred_angles_O_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
-        if Train:
-            pred_seqs_1 = seqs_1
-        else:
-            pred_seqs_1 = sample_from(F.softmax(pred_seqs1_prob, dim=-1))
-
-
-        # Predict the chi angles via teacher forcing
-        node_embed_chi = self.res_feat_mixer(torch.cat(
-            [node_embed, self.current_seq_embedder(pred_seqs_1), self.embed_t(t, node_mask),
-             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
-        node_embed_chi = node_embed_chi * node_mask[..., None]
-        for b in range(self.chi_trunk):
-            ipa_embed = self.trunk[f'ipa_{b}'](
-                node_embed_chi,
-                edge_embed,
-                curr_rigids,
-                node_mask)
-            ipa_embed *= node_mask[..., None]
-            node_embed_chi = self.trunk[f'ipa_ln_{b}'](node_embed_chi + ipa_embed)
-            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
-                node_embed_chi, src_key_padding_mask=(1 - node_mask).bool())
-            node_embed_chi = node_embed_chi + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
-            node_embed_chi = self.trunk[f'node_transition_{b}'](node_embed_chi)
-            node_embed_chi = node_embed_chi * node_mask[..., None]
-
-            if b < (self.chi_trunk - 1):
-                edge_embed = self.trunk[f'edge_transition_{b}'](
-                    node_embed_chi, edge_embed)
-                edge_embed *= edge_mask[..., None]
-
-        pred_angles_chi_1 = self.angle_chi_net(node_embed_chi)
-        pred_angles_chi_1 = pred_angles_chi_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
-
-        pred_angles_1 = torch.cat([pred_angles_O_1, pred_angles_chi_1], dim=-1)  # Concatenate O and chi angles
-
-        return pred_rotmats1, pred_trans1, pred_angles_1, pred_seqs1_prob, pred_seqs_1
-
-class GAEncoder_NS3_PredChi_delta(nn.Module):
-    # Keep the model parameters similar to that of PepFlow
-    # Predict Chi and delta of scaa
-    def __init__(self, ipa_conf):
-        super().__init__()
-        self._ipa_conf = ipa_conf
-
-        # angles
-        self.angles_embedder = AngularEncoding(num_funcs=12)
-        num_angle_O = 1  # Only for the O atom
-        self.angle_O_net = nn.Sequential(
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, num_angle_O)
-        )
-
-        num_angle_chi = len(constants.chi_angles_mask[constants.AA.ALA])  # Exclude the O atom
-        self.angle_chi_net = nn.Sequential(
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, num_angle_chi)
-        )        
-
-        # for condition on current seq
-        self.current_seq_embedder = nn.Embedding(constants.PAD_RESIDUE_INDEX + 1,
-                                                 self._ipa_conf.c_s)
-        self.seq_net = nn.Sequential(
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, constants.PAD_RESIDUE_INDEX - 1)
-        )
-
-        self.sc_net = nn.Sequential(
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, (constants.max_num_heavyatoms - 6) * 3)  # 3D coordinates of 11 side chain atoms
-        )
-
-        # mixer
-        self.res_feat_mixer = nn.Sequential(
-            nn.Linear(3 * self._ipa_conf.c_s + self.angles_embedder.get_out_dim(in_dim=num_angle_O),
-                      self._ipa_conf.c_s),
-            nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s),
-        )
-
-        self.feat_dim = self._ipa_conf.c_s
-
-        # Attention trunk
-        self.trunk = nn.ModuleDict()
-        for b in range(self._ipa_conf.num_blocks):
-            self.trunk[f'ipa_{b}'] = ipa_pytorch.InvariantPointAttention(self._ipa_conf)
-            self.trunk[f'ipa_ln_{b}'] = nn.LayerNorm(self._ipa_conf.c_s)
-            tfmr_in = self._ipa_conf.c_s
-            tfmr_layer = torch.nn.TransformerEncoderLayer(
-                d_model=tfmr_in,
-                nhead=self._ipa_conf.seq_tfmr_num_heads,
-                dim_feedforward=tfmr_in,
-                batch_first=True,
-                dropout=0.0,
-                norm_first=False
-            )
-            self.trunk[f'seq_tfmr_{b}'] = torch.nn.TransformerEncoder(
-                tfmr_layer, self._ipa_conf.seq_tfmr_num_layers, enable_nested_tensor=False)
-            self.trunk[f'post_tfmr_{b}'] = ipa_pytorch.Linear(
-                tfmr_in, self._ipa_conf.c_s, init="final")
-            self.trunk[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
-                c=self._ipa_conf.c_s)
-            self.trunk[f'bb_update_{b}'] = ipa_pytorch.BackboneUpdate(
-                self._ipa_conf.c_s, use_rot_updates=True)
-
-            if b < self._ipa_conf.num_blocks - 1:
-                # No edge update on the last block.
-                edge_in = self._ipa_conf.c_z
-                self.trunk[f'edge_transition_{b}'] = ipa_pytorch.EdgeTransition(
-                    node_embed_size=self._ipa_conf.c_s,
-                    edge_embed_in=edge_in,
-                    edge_embed_out=self._ipa_conf.c_z,
-                )
-        self.chi_trunk = 2
-
-    def embed_t(self, timesteps, mask):
-        timestep_emb = get_time_embedding(
-            timesteps[:, 0],
-            self.feat_dim,
-            max_positions=2056
-        )[:, None, :].repeat(1, mask.shape[1], 1)
-        return timestep_emb
-
-    def forward(self, t, rotmats_t, trans_t, angles_t, 
-                seqs_t, seqs_1, node_embed, edge_embed, 
-                generate_mask, res_mask, Train=True):
-        # Make sure that angles_t only contains the O atom angle
-        angles_O_t = angles_t[:, :, 0:1]  # Only keep the first angle (O atom angle)
-        num_batch, num_res = seqs_t.shape
-
-        # incorperate current seq and timesteps
-        node_mask = res_mask
-        edge_mask = node_mask[:, None] * node_mask[:, :, None]
-
-        node_embed = self.res_feat_mixer(torch.cat(
-            [node_embed, self.current_seq_embedder(seqs_t), self.embed_t(t, node_mask),
-             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
-        node_embed = node_embed * node_mask[..., None]
-        curr_rigids = du.create_rigid(rotmats_t, trans_t)
-        for b in range(self._ipa_conf.num_blocks):
-            ipa_embed = self.trunk[f'ipa_{b}'](
-                node_embed,
-                edge_embed,
-                curr_rigids,
-                node_mask)
-            ipa_embed *= node_mask[..., None]
-            node_embed = self.trunk[f'ipa_ln_{b}'](node_embed + ipa_embed)
-            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
-                node_embed, src_key_padding_mask=(1 - node_mask).bool())
-            node_embed = node_embed + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
-            node_embed = self.trunk[f'node_transition_{b}'](node_embed)
-            node_embed = node_embed * node_mask[..., None]
-            rigid_update = self.trunk[f'bb_update_{b}'](
-                node_embed * node_mask[..., None])
-            curr_rigids = curr_rigids.compose_q_update_vec(
-                rigid_update, node_mask[..., None])
-
-            if b < self._ipa_conf.num_blocks - 1:
-                edge_embed = self.trunk[f'edge_transition_{b}'](
-                    node_embed, edge_embed)
-                edge_embed *= edge_mask[..., None]
-
-        # curr_rigids = self.rigids_nm_to_ang(curr_rigids)
-        pred_trans1 = curr_rigids.get_trans()
-        pred_rotmats1 = curr_rigids.get_rots().get_rot_mats()
-        pred_seqs1_prob = self.seq_net(node_embed)
-        pred_angles_O_1 = self.angle_O_net(node_embed)
-        pred_angles_O_1 = pred_angles_O_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
-        if Train:
-            pred_seqs_1 = seqs_1
-        else:
-            pred_seqs_1 = sample_from(F.softmax(pred_seqs1_prob, dim=-1))
-
-
-        # Predict the chi angles via teacher forcing
-        node_embed_chi = self.res_feat_mixer(torch.cat(
-            [node_embed, self.current_seq_embedder(pred_seqs_1), self.embed_t(t, node_mask),
-             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
-        node_embed_chi = node_embed_chi * node_mask[..., None]
-        for b in range(self.chi_trunk):
-            ipa_embed = self.trunk[f'ipa_{b}'](
-                node_embed_chi,
-                edge_embed,
-                curr_rigids,
-                node_mask)
-            ipa_embed *= node_mask[..., None]
-            node_embed_chi = self.trunk[f'ipa_ln_{b}'](node_embed_chi + ipa_embed)
-            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
-                node_embed_chi, src_key_padding_mask=(1 - node_mask).bool())
-            node_embed_chi = node_embed_chi + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
-            node_embed_chi = self.trunk[f'node_transition_{b}'](node_embed_chi)
-            node_embed_chi = node_embed_chi * node_mask[..., None]
-
-            if b < (self.chi_trunk - 1):
-                edge_embed = self.trunk[f'edge_transition_{b}'](
-                    node_embed_chi, edge_embed)
-                edge_embed *= edge_mask[..., None]
-
-        pred_angles_chi_1 = self.angle_chi_net(node_embed_chi)
-        pred_angles_chi_1 = pred_angles_chi_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
-        pred_sctrans_ep = self.sc_net(node_embed_chi)
-        pred_sctrans_ep = ipa_pytorch.sctrans_organize(pred_sctrans_ep)
-
-        pred_angles_1 = torch.cat([pred_angles_O_1, pred_angles_chi_1], dim=-1)  # Concatenate O and chi angles
-
-        return pred_rotmats1, pred_trans1, pred_angles_1, pred_seqs1_prob, pred_seqs_1, pred_sctrans_ep
-
-
-class GAEncoder_NS3_PredChi_packing(nn.Module):
-    # Keep the model parameters similar to that of PepFlow
-    # When t < 0.75 in training, side chain packing with GT {R, T}
-    def __init__(self, ipa_conf):
-        super().__init__()
-        self._ipa_conf = ipa_conf
-
-        # angles
-        self.angles_embedder = AngularEncoding(num_funcs=12)
-        num_angle_O = 1  # Only for the O atom
-        self.angle_O_net = nn.Sequential(
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, num_angle_O)
-        )
-
-        num_angle_chi = len(constants.chi_angles_mask[constants.AA.ALA])  # Exclude the O atom
-        self.angle_chi_net = nn.Sequential(
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, num_angle_chi)
-        )        
-
-        # for condition on current seq
-        self.current_seq_embedder = nn.Embedding(constants.PAD_RESIDUE_INDEX + 1,
-                                                 self._ipa_conf.c_s)
-        self.seq_net = nn.Sequential(
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, constants.PAD_RESIDUE_INDEX - 1)
-        )
-
-        # mixer
-        self.res_feat_mixer = nn.Sequential(
-            nn.Linear(3 * self._ipa_conf.c_s + self.angles_embedder.get_out_dim(in_dim=num_angle_O),
-                      self._ipa_conf.c_s),
-            nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s),
-        )
-
-        self.feat_dim = self._ipa_conf.c_s
-
-        # Attention trunk
-        self.trunk = nn.ModuleDict()
-        for b in range(self._ipa_conf.num_blocks):
-            self.trunk[f'ipa_{b}'] = ipa_pytorch.InvariantPointAttention(self._ipa_conf)
-            self.trunk[f'ipa_ln_{b}'] = nn.LayerNorm(self._ipa_conf.c_s)
-            tfmr_in = self._ipa_conf.c_s
-            tfmr_layer = torch.nn.TransformerEncoderLayer(
-                d_model=tfmr_in,
-                nhead=self._ipa_conf.seq_tfmr_num_heads,
-                dim_feedforward=tfmr_in,
-                batch_first=True,
-                dropout=0.0,
-                norm_first=False
-            )
-            self.trunk[f'seq_tfmr_{b}'] = torch.nn.TransformerEncoder(
-                tfmr_layer, self._ipa_conf.seq_tfmr_num_layers, enable_nested_tensor=False)
-            self.trunk[f'post_tfmr_{b}'] = ipa_pytorch.Linear(
-                tfmr_in, self._ipa_conf.c_s, init="final")
-            self.trunk[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
-                c=self._ipa_conf.c_s)
-            self.trunk[f'bb_update_{b}'] = ipa_pytorch.BackboneUpdate(
-                self._ipa_conf.c_s, use_rot_updates=True)
-
-            if b < self._ipa_conf.num_blocks - 1:
-                # No edge update on the last block.
-                edge_in = self._ipa_conf.c_z
-                self.trunk[f'edge_transition_{b}'] = ipa_pytorch.EdgeTransition(
-                    node_embed_size=self._ipa_conf.c_s,
-                    edge_embed_in=edge_in,
-                    edge_embed_out=self._ipa_conf.c_z,
-                )
-        self.chi_trunk = 2
-
-    def embed_t(self, timesteps, mask):
-        timestep_emb = get_time_embedding(
-            timesteps[:, 0],
-            self.feat_dim,
-            max_positions=2056
-        )[:, None, :].repeat(1, mask.shape[1], 1)
-        return timestep_emb
-
-    def forward(self, t, rotmats_t, trans_t, angles_t, 
-                seqs_t, seqs_1, trans_1, rotmats_1, 
-                node_embed, edge_embed, res_mask, Train=True):
-        # Make sure that angles_t only contains the O atom angle
-        node_embed_chi = node_embed.clone()
-        angles_O_t = angles_t[:, :, :1]  # Only keep the first angle (O atom angle)
-        num_batch, num_res = seqs_t.shape
-
-        # incorperate current seq and timesteps
-        node_mask = res_mask
-        edge_mask = node_mask[:, None] * node_mask[:, :, None]
-
-        node_embed = self.res_feat_mixer(torch.cat(
-            [node_embed, self.current_seq_embedder(seqs_t), self.embed_t(t, node_mask),
-             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
-        node_embed = node_embed * node_mask[..., None]
-        curr_rigids = du.create_rigid(rotmats_t, trans_t)
-        for b in range(self._ipa_conf.num_blocks):
-            ipa_embed = self.trunk[f'ipa_{b}'](
-                node_embed,
-                edge_embed,
-                curr_rigids,
-                node_mask)
-            ipa_embed *= node_mask[..., None]
-            node_embed = self.trunk[f'ipa_ln_{b}'](node_embed + ipa_embed)
-            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
-                node_embed, src_key_padding_mask=(1 - node_mask).bool())
-            node_embed = node_embed + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
-            node_embed = self.trunk[f'node_transition_{b}'](node_embed)
-            node_embed = node_embed * node_mask[..., None]
-            rigid_update = self.trunk[f'bb_update_{b}'](
-                node_embed * node_mask[..., None])
-            curr_rigids = curr_rigids.compose_q_update_vec(
-                rigid_update, node_mask[..., None])
-
-            if b < self._ipa_conf.num_blocks - 1:
-                edge_embed = self.trunk[f'edge_transition_{b}'](
-                    node_embed, edge_embed)
-                edge_embed *= edge_mask[..., None]
-
-        # curr_rigids = self.rigids_nm_to_ang(curr_rigids)
-        pred_trans1 = curr_rigids.get_trans()
-        pred_rotmats1 = curr_rigids.get_rots().get_rot_mats()
-        pred_seqs1_prob = self.seq_net(node_embed)
-        pred_angles_O_1 = self.angle_O_net(node_embed)
-        pred_angles_O_1 = pred_angles_O_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
-
-
-        if Train:
-            pred_seqs_1 = seqs_1
-            rotmats_1_chi = torch.where(t[..., None, None] < 0.75, rotmats_1, rotmats_t)
-            trans_1_chi = torch.where(t[..., None] < 0.75, trans_1, trans_t)
-            curr_rigids = du.create_rigid(rotmats_1_chi, trans_1_chi)            
-            node_embed_chi = torch.where(t[..., None] < 0.75, node_embed_chi, node_embed)
-            t_chi = torch.where(t < 0.75, 1.00, t)
-        else:
-            pred_seqs_1 = sample_from(F.softmax(pred_seqs1_prob, dim=-1))
-            node_embed_chi = node_embed
-            t_chi = t
-
-        # Predict the chi angles via teacher forcing
-        node_embed_chi = self.res_feat_mixer(torch.cat(
-            [node_embed_chi, self.current_seq_embedder(pred_seqs_1), self.embed_t(t_chi, node_mask),
-             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
-        node_embed_chi = node_embed_chi * node_mask[..., None]
-        for b in range(self.chi_trunk):
-            ipa_embed = self.trunk[f'ipa_{b}'](
-                node_embed_chi,
-                edge_embed,
-                curr_rigids,
-                node_mask)
-            ipa_embed *= node_mask[..., None]
-            node_embed_chi = self.trunk[f'ipa_ln_{b}'](node_embed_chi + ipa_embed)
-            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
-                node_embed_chi, src_key_padding_mask=(1 - node_mask).bool())
-            node_embed_chi = node_embed_chi + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
-            node_embed_chi = self.trunk[f'node_transition_{b}'](node_embed_chi)
-            node_embed_chi = node_embed_chi * node_mask[..., None]
-
-            if b < (self.chi_trunk - 1):
-                edge_embed = self.trunk[f'edge_transition_{b}'](
-                    node_embed_chi, edge_embed)
-                edge_embed *= edge_mask[..., None]
-
-        pred_angles_chi_1 = self.angle_chi_net(node_embed_chi)
-        pred_angles_chi_1 = pred_angles_chi_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
-
-        pred_angles_1 = torch.cat([pred_angles_O_1, pred_angles_chi_1], dim=-1)  # Concatenate O and chi angles
-
-        return pred_rotmats1, pred_trans1, pred_angles_1, pred_seqs1_prob, pred_seqs_1
-
-
-class GAEncoder_NS3_PredChi_same_param_layer(nn.Module):
-    # Keep the model parameters similar to that of PepFlow
-    # Use the last two layers to predict Chi.
-    def __init__(self, ipa_conf):
-        super().__init__()
-        self._ipa_conf = ipa_conf
-
-        # angles
-        self.angles_embedder = AngularEncoding(num_funcs=12)
-        num_angle_O = 1  # Only for the O atom
-        self.angle_O_net = nn.Sequential(
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, num_angle_O)
-        )
-
-        num_angle_chi = len(constants.chi_angles_mask[constants.AA.ALA])  # Exclude the O atom
-        self.angle_chi_net = nn.Sequential(
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, num_angle_chi)
-        )        
-
-        # for condition on current seq
-        self.current_seq_embedder = nn.Embedding(constants.PAD_RESIDUE_INDEX + 1,
-                                                 self._ipa_conf.c_s)
-        self.seq_net = nn.Sequential(
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s), nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, constants.PAD_RESIDUE_INDEX - 1)
-        )
-
-        # mixer
-        self.res_feat_mixer = nn.Sequential(
-            nn.Linear(3 * self._ipa_conf.c_s + self.angles_embedder.get_out_dim(in_dim=num_angle_O),
-                      self._ipa_conf.c_s),
-            nn.ReLU(),
-            nn.Linear(self._ipa_conf.c_s, self._ipa_conf.c_s),
-        )
-
-        self.feat_dim = self._ipa_conf.c_s
-
-        # Attention trunk
-        self.trunk = nn.ModuleDict()
-        for b in range(self._ipa_conf.num_blocks):
-            self.trunk[f'ipa_{b}'] = ipa_pytorch.InvariantPointAttention(self._ipa_conf)
-            self.trunk[f'ipa_ln_{b}'] = nn.LayerNorm(self._ipa_conf.c_s)
-            tfmr_in = self._ipa_conf.c_s
-            tfmr_layer = torch.nn.TransformerEncoderLayer(
-                d_model=tfmr_in,
-                nhead=self._ipa_conf.seq_tfmr_num_heads,
-                dim_feedforward=tfmr_in,
-                batch_first=True,
-                dropout=0.0,
-                norm_first=False
-            )
-            self.trunk[f'seq_tfmr_{b}'] = torch.nn.TransformerEncoder(
-                tfmr_layer, self._ipa_conf.seq_tfmr_num_layers, enable_nested_tensor=False)
-            self.trunk[f'post_tfmr_{b}'] = ipa_pytorch.Linear(
-                tfmr_in, self._ipa_conf.c_s, init="final")
-            self.trunk[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
-                c=self._ipa_conf.c_s)
-            self.trunk[f'bb_update_{b}'] = ipa_pytorch.BackboneUpdate(
-                self._ipa_conf.c_s, use_rot_updates=True)
-
-            if b < self._ipa_conf.num_blocks - 1:
-                # No edge update on the last block.
-                edge_in = self._ipa_conf.c_z
-                self.trunk[f'edge_transition_{b}'] = ipa_pytorch.EdgeTransition(
-                    node_embed_size=self._ipa_conf.c_s,
-                    edge_embed_in=edge_in,
-                    edge_embed_out=self._ipa_conf.c_z,
-                )
-        self.chi_trunk = 2
-
-    def embed_t(self, timesteps, mask):
-        timestep_emb = get_time_embedding(
-            timesteps[:, 0],
-            self.feat_dim,
-            max_positions=2056
-        )[:, None, :].repeat(1, mask.shape[1], 1)
-        return timestep_emb
-
-    def forward(self, t, rotmats_t, trans_t, angles_t, 
-                seqs_t, seqs_1, node_embed, edge_embed, 
-                generate_mask, res_mask, Train=True):
-        # Make sure that angles_t only contains the O atom angle
-        angles_O_t = angles_t[:, :, 0:1]  # Only keep the first angle (O atom angle)
-        num_batch, num_res = seqs_t.shape
-
-        # incorperate current seq and timesteps
-        node_mask = res_mask
-        edge_mask = node_mask[:, None] * node_mask[:, :, None]
-
-        node_embed = self.res_feat_mixer(torch.cat(
-            [node_embed, self.current_seq_embedder(seqs_t), self.embed_t(t, node_mask),
-             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
-        node_embed = node_embed * node_mask[..., None]
-        curr_rigids = du.create_rigid(rotmats_t, trans_t)
-        for b in range(self._ipa_conf.num_blocks):
-            ipa_embed = self.trunk[f'ipa_{b}'](
-                node_embed,
-                edge_embed,
-                curr_rigids,
-                node_mask)
-            ipa_embed *= node_mask[..., None]
-            node_embed = self.trunk[f'ipa_ln_{b}'](node_embed + ipa_embed)
-            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
-                node_embed, src_key_padding_mask=(1 - node_mask).bool())
-            node_embed = node_embed + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
-            node_embed = self.trunk[f'node_transition_{b}'](node_embed)
-            node_embed = node_embed * node_mask[..., None]
-            rigid_update = self.trunk[f'bb_update_{b}'](
-                node_embed * node_mask[..., None])
-            curr_rigids = curr_rigids.compose_q_update_vec(
-                rigid_update, node_mask[..., None])
-
-            if b < self._ipa_conf.num_blocks - 1:
-                edge_embed = self.trunk[f'edge_transition_{b}'](
-                    node_embed, edge_embed)
-                edge_embed *= edge_mask[..., None]
-
-        # curr_rigids = self.rigids_nm_to_ang(curr_rigids)
-        pred_trans1 = curr_rigids.get_trans()
-        pred_rotmats1 = curr_rigids.get_rots().get_rot_mats()
-        pred_seqs1_prob = self.seq_net(node_embed)
-        pred_angles_O_1 = self.angle_O_net(node_embed)
-        pred_angles_O_1 = pred_angles_O_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
-        if Train:
-            pred_seqs_1 = seqs_1
-        else:
-            pred_seqs_1 = sample_from(F.softmax(pred_seqs1_prob, dim=-1))
-
-
-        # Predict the chi angles via teacher forcing
-        node_embed_chi = self.res_feat_mixer(torch.cat(
-            [node_embed, self.current_seq_embedder(pred_seqs_1), self.embed_t(t, node_mask),
-             self.angles_embedder(angles_O_t).reshape(num_batch, num_res, -1)], dim=-1))
-        node_embed_chi = node_embed_chi * node_mask[..., None]
-        for b in range(self._ipa_conf.num_blocks - self.chi_trunk, self._ipa_conf.num_blocks):
-            ipa_embed = self.trunk[f'ipa_{b}'](
-                node_embed_chi,
-                edge_embed,
-                curr_rigids,
-                node_mask)
-            ipa_embed *= node_mask[..., None]
-            node_embed_chi = self.trunk[f'ipa_ln_{b}'](node_embed_chi + ipa_embed)
-            seq_tfmr_out = self.trunk[f'seq_tfmr_{b}'](
-                node_embed_chi, src_key_padding_mask=(1 - node_mask).bool())
-            node_embed_chi = node_embed_chi + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
-            node_embed_chi = self.trunk[f'node_transition_{b}'](node_embed_chi)
-            node_embed_chi = node_embed_chi * node_mask[..., None]
-
-            if b < (self._ipa_conf.num_blocks - 1):
-                edge_embed = self.trunk[f'edge_transition_{b}'](
-                    node_embed_chi, edge_embed)
-                edge_embed *= edge_mask[..., None]
-
-        pred_angles_chi_1 = self.angle_chi_net(node_embed_chi)
-        pred_angles_chi_1 = pred_angles_chi_1 % (2 * math.pi)  # inductive bias to bound between (0,2pi)
-
-        pred_angles_1 = torch.cat([pred_angles_O_1, pred_angles_chi_1], dim=-1)  # Concatenate O and chi angles
-
-        return pred_rotmats1, pred_trans1, pred_angles_1, pred_seqs1_prob, pred_seqs_1
 
 
 class GAEncoder_SEP(nn.Module):

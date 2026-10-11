@@ -91,8 +91,9 @@ def batch_align_structures(pos_1, pos_2, mask=None):
 _natural_amino_acids = {
     "ALA", "CYS", "ASP", "GLU", "PHE", "GLY", "HIS", "ILE", "LYS", "LEU",
     "MET", "ASN", "PRO", "GLN", "ARG", "SER", "THR", "VAL", "TRP", "TYR",
-    "ZN", "NH2", "NA", "UNK",
-    "SEP", "PTR", "TYS",  # NS3
+    # "ZN", "NH2", "NA", "UNK",
+    "SEP", "PTR", "TYS", "MLE", "M3L", "ALY", "TPO", "DAL", "HYP", "MVA",
+    "DLY", "DLE", "SAR", "NLE", "BMT", "DGL", "DPR", "DTR",  # NS18
 }
 
 
@@ -223,17 +224,16 @@ def count_aa(src_dir: str, output_path: str, T_ex=False):
     rec_csv.to_csv(output_path, index=False)
 
 
-def reassign_chain_ID(src_dir, tgt_items, receptor="pocket"):
-    # To re-assign the chain ID of data in PepFlow (Lig: 'A')
+def renumber_chain(src_dir):
+    # To renumber the chain of data in PepFlow (Lig: 'A')
     parser = PDBParser()
     io = PDBIO()
-    # src_con = os.listdir(src_dir)
+    src_con = os.listdir(src_dir)
 
-    for item in tgt_items:
+    for item in src_con:
         if os.path.isdir(os.path.join(src_dir, item)):
-            print(f"Dealing with {item}...")
             struc_lig = parser.get_structure("lig", os.path.join(src_dir, item, "peptide.pdb"))
-            struc_poc = parser.get_structure("rec", os.path.join(src_dir, item, f"{receptor}.pdb"))
+            struc_poc = parser.get_structure("rec", os.path.join(src_dir, item, "pocket.pdb"))
 
             ligand_renumber = Structure('ligand_re')
             model_lig = Model(0)
@@ -275,31 +275,7 @@ def reassign_chain_ID(src_dir, tgt_items, receptor="pocket"):
                         break
 
             io.set_structure(pocket_renumber)
-            io.save(os.path.join(src_dir, item, f"{receptor}_re.pdb"))
-
-
-def renumber_pdb_residues(input_pdb, output_pdb):
-    parser = PDBParser(QUIET=True)
-    structure = parser.get_structure("X", input_pdb)[0]
-
-    # Pass 1: assign temporary negative IDs
-    for chain in structure:
-        temp_id = -1001
-        for res in list(chain):
-            res.id = (' ', temp_id, ' ')
-            temp_id -= 1
-
-    # Pass 2: assign final sequential positive IDs
-    for chain in structure:
-        new_id = 1
-        for res in list(chain):
-            res.id = (' ', new_id, ' ')
-            new_id += 1
-
-    # Write the renumbered structure to file
-    io = PDBIO()
-    io.set_structure(structure)
-    io.save(output_pdb)
+            io.save(os.path.join(src_dir, item, "pocket_re.pdb"))
 
 
 def fetch_pdb_resolution(pdb_id):
@@ -426,79 +402,4 @@ def find_LCS_and_masks(A, B):
     mask_B = np.array([char == '1' for char in b_str])
     return LCS, mask_A, mask_B
 
-def merge_pdb(pdb_file1, pdb_file2, output_file, set_chain_ID=False, specify_ID=None, center=None):
-    # Initialize parser and IO objects
-    parser = PDBParser(QUIET=True)
-    io = PDBIO()
 
-    # Parse the two PDB files
-    structure1 = parser.get_structure("Structure1", pdb_file1)
-    structure2 = parser.get_structure("Structure2", pdb_file2)
-
-    # --- Move the first structure if a center is provided ---
-    if center is not None:
-        # 1. Get all atom coordinates from structure1
-        atoms = list(structure1.get_atoms())
-        # coords = np.array([atom.get_coord() for atom in atoms])
-
-        # # 2. Calculate the current geometric center of structure1
-        # current_center = np.mean(coords, axis=0)
-
-        # # 3. Calculate the translation vector
-        # desired_center = np.array(center)
-        translation_vector = np.array(center)
-
-        # 4. Apply the translation to every atom in structure1
-        for atom in atoms:
-            atom.set_coord(atom.get_coord() + translation_vector)
-    # -----------------------------------------------------------
-
-    # Create a new structure and model
-    merged_structure = Structure("Merged")
-    merged_model = Model(0)  # Model ID is set to 0
-
-    # Add chains from the first structure to the new model
-    for chain in structure1[0]:  # Assuming the first model in each structure
-        if set_chain_ID:
-            chain.id = 'A'
-        if specify_ID is None:
-            merged_model.add(chain)
-        else:
-            if chain.id == specify_ID:
-                merged_model.add(chain)
-
-    # Add chains from the second structure to the new model
-    if set_chain_ID or specify_ID:
-        for chain in structure2[0]:
-            # chain.id = 'B'
-            # model_poc.add(chain.copy())
-            existing_chain_ids = {chain.id for chain in structure2[0]}
-            temp_chain_id_iter = iter("XYZWVUTSRQPO")  # Temporary chain IDs
-            # Temporarily rename each chain
-            # for chain in struc_poc[0]:
-            while True:
-                temp_chain_id = next(temp_chain_id_iter)
-                if temp_chain_id not in existing_chain_ids:
-                    chain.id = temp_chain_id
-                    existing_chain_ids.add(temp_chain_id)
-                    break
-        pocket_chains = set()  # To store the final assigned chain IDs
-        new_chain_ids = iter("BCDEFGHIJKLMNOPQRSTUVWXYZ")
-        for chain in structure2[0]:
-            while True:
-                new_chain_id = next(new_chain_ids)
-                if new_chain_id not in pocket_chains:
-                    chain.id = new_chain_id
-                    pocket_chains.add(new_chain_id)
-                    merged_model.add(chain.copy())
-                    break
-    else:
-        for chain in structure2[0]:  # Assuming the first model in each structure
-            merged_model.add(chain)
-
-    # Add the model to the merged structure
-    merged_structure.add(merged_model)
-
-    # Save the merged structure to the output file
-    io.set_structure(merged_structure)
-    io.save(output_file)

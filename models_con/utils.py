@@ -133,3 +133,16 @@ def seesaw_ce_loss(cls_score: torch.Tensor,
     loss = F.cross_entropy(cls_score, labels, weight=None, reduction='none')
     return loss
 
+def zero_center_part(pos, gen_mask, res_mask):
+    """
+    move pos by center of gen_mask
+    pos: (B,N,3)
+    gen_mask, res_mask: (B,N)
+    """
+    center = torch.sum(pos * gen_mask[..., None], dim=1) / (
+            torch.sum(gen_mask, dim=-1, keepdim=True) + 1e-8)  # (B,N,3)*(B,N,1)->(B,3)/(B,1)->(B,3)
+    center = center.unsqueeze(1)  # (B,1,3)
+    # center = 0. it seems not center didnt influence the result, but its good for training stabilty
+    pos = pos - center
+    pos = pos * res_mask[..., None]
+    return pos, center

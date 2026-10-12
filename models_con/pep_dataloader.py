@@ -46,8 +46,9 @@ from pepflow.modules.protein.writers import save_pdb
 # Data_split
 # data_split_file = "./data/data_split_NS3.json"
 data_split_file = "/ibex/user/guot0b/PepFlowww-NS3/data/PepMerge_lmdb/data_split_NoscPep.json"
-with open(data_split_file, 'r') as f:
-    data_split = json.load(f)
+if os.path.exists(data_split_file):  # cluster-only file; not needed for inference
+    with open(data_split_file, 'r') as f:
+        data_split = json.load(f)
 
 # testset
 names = []
